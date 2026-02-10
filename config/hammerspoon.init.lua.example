@@ -3,7 +3,7 @@
 -- 2) Copy this file to ~/.hammerspoon/init.lua (or paste into your existing init.lua)
 -- 3) Update projectRoot and hotkey below.
 
-local projectRoot = "/Users/gmcgrath/Documents/Codex Test/ChatGPT Atlas Mod?"
+local projectRoot = "/ABSOLUTE/PATH/auto_refresh_google_slides"
 local triggerScript = projectRoot .. "/scripts/slides_hotkey_trigger.sh"
 
 -- Choose mode: "local" (this machine only), "relay" (outbound-only cloud trigger), "ssh" (direct SSH trigger)

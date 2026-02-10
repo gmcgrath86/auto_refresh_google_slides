@@ -9,6 +9,8 @@ For managed laptops where Sharing/SSH is blocked, use relay mode.
 Quick deployment:
 - See `DEPLOY.md` for machine-by-machine rollout steps.
 - Bootstrap any machine with `./scripts/bootstrap_machine.sh --role <presentation|relay-agent|controller>`.
+- Fresh machine with hotkey in one command:
+  - `./scripts/bootstrap_machine.sh --role presentation --install-hotkey`
 
 ## What this solves
 One Stream Deck button can:
@@ -168,22 +170,27 @@ cp config/controller.env.example config/controller.env
 ## Global hotkey (while presenting)
 If you want a keyboard hotkey that works even when Chrome is fullscreen:
 
-1. Use the wrapper script:
+1. Easiest setup (recommended):
+```bash
+./scripts/bootstrap_machine.sh --role presentation --install-hotkey
+```
+
+2. Use the wrapper script:
 ```bash
 ./scripts/slides_hotkey_trigger.sh --mode local --config ./config/local.env
 ```
 
-2. Install Hammerspoon:
+3. Install Hammerspoon:
 ```bash
 brew install --cask hammerspoon
 ```
 
-3. Copy the example config:
+4. Copy the example config:
 ```bash
 cp config/hammerspoon.init.lua.example ~/.hammerspoon/init.lua
 ```
 
-4. Edit `~/.hammerspoon/init.lua`:
+5. Edit `~/.hammerspoon/init.lua`:
 - Set `projectRoot` to your project path.
 - Choose `triggerMode`:
   - `"local"` for this laptop only
@@ -192,9 +199,9 @@ cp config/hammerspoon.init.lua.example ~/.hammerspoon/init.lua
 - Set `triggerConfig` to the matching config file.
 - Pick your key combo (`hotkeyMods` + `hotkeyKey`).
 
-5. Open Hammerspoon, grant Accessibility permission, and click `Reload Config`.
+6. Open Hammerspoon, grant Accessibility permission, and click `Reload Config`.
 
-6. Press your hotkey (default in example: `ctrl+alt+cmd+r`).
+7. Press your hotkey (default in example: `ctrl+alt+cmd+r`).
 
 Notes:
 - Stream Deck can send the same hotkey if you prefer pressing a Stream Deck key.

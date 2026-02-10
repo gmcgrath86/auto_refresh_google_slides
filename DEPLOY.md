@@ -15,6 +15,11 @@ cd auto_refresh_google_slides
 
 That creates machine-local config files if missing and makes scripts executable.
 
+To also install and wire the global hotkey in one shot:
+```bash
+./scripts/bootstrap_machine.sh --role presentation --install-hotkey
+```
+
 ## 3) Configure this machine
 Edit:
 - `config/local.env`
@@ -46,18 +51,15 @@ Expected result:
 - Presenter notes fullscreen on mirrored/local display.
 
 ## 6) Hotkey setup (optional)
-Install Hammerspoon:
+Recommended:
 ```bash
-brew install --cask hammerspoon
+./scripts/bootstrap_machine.sh --role presentation --install-hotkey
 ```
 
-Then:
-```bash
-mkdir -p ~/.hammerspoon
-cp config/hammerspoon.init.lua.example ~/.hammerspoon/slides_hotkey.lua
-```
-
-Ensure `~/.hammerspoon/init.lua` includes:
+Manual alternative:
+- Install Hammerspoon (`brew install --cask hammerspoon`)
+- Create `~/.hammerspoon/slides_hotkey.lua`
+- Ensure `~/.hammerspoon/init.lua` includes:
 ```lua
 dofile(os.getenv("HOME") .. "/.hammerspoon/slides_hotkey.lua")
 ```
