@@ -12,6 +12,30 @@ Quick deployment:
 - Fresh machine with hotkey in one command:
   - `./scripts/bootstrap_machine.sh --role presentation --install-hotkey`
 
+## Fresh Machine Quickstart (Single Laptop + Hotkey)
+Run these exact commands on a new presentation machine:
+
+```bash
+git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git "$HOME/auto_refresh_google_slides"
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+```
+
+Then set the four required local values:
+
+```bash
+FILE="$HOME/auto_refresh_google_slides/config/local.env"
+grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
+grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
+grep -q '^PRIMARY_BOUNDS=' "$FILE" && sed -i '' 's|^PRIMARY_BOUNDS=.*|PRIMARY_BOUNDS="1920,25,3840,1080"|' "$FILE" || echo 'PRIMARY_BOUNDS="1920,25,3840,1080"' >> "$FILE"
+grep -q '^NOTES_BOUNDS=' "$FILE" && sed -i '' 's|^NOTES_BOUNDS=.*|NOTES_BOUNDS="0,25,1920,1080"|' "$FILE" || echo 'NOTES_BOUNDS="0,25,1920,1080"' >> "$FILE"
+```
+
+Final checks:
+- Turn on `Hammerspoon` in `System Settings -> Privacy & Security -> Accessibility`.
+- Open a Slides deck in Chrome.
+- Press `ctrl+alt+cmd+r`.
+- Verify with `tail -n 60 /tmp/slides-hotkey.log`.
+
 ## What this solves
 One Stream Deck button can:
 1. Relaunch Slides presentation + notes windows locally.
@@ -125,7 +149,7 @@ From controller machine:
 ### 5) Bind Stream Deck key
 Use `System -> Open` or `System -> Command` with:
 ```bash
-cd '/Users/gmcgrath/Documents/Codex Test/ChatGPT Atlas Mod?' && ./scripts/slides_relay_streamdeck_trigger.sh ./config/relay_streamdeck.env
+cd '/ABSOLUTE/PATH/auto_refresh_google_slides' && ./scripts/slides_relay_streamdeck_trigger.sh ./config/relay_streamdeck.env
 ```
 
 ### 6) Optional: run relay agent as LaunchAgent
@@ -166,6 +190,7 @@ cp config/controller.env.example config/controller.env
 - Relay agent not triggering: verify `RELAY_URL`, `RELAY_SECRET`, and that `doGet` returns JSON with `ok:true`.
 - Repeated triggering on startup: keep `FIRE_ON_STARTUP=0`.
 - `Access Denied` in Chrome: the deck URL/account pair is not accessible in that Chrome profile. Open a deck that works in that profile and set `SLIDES_SOURCE_URL` to that URL.
+- `Unable to determine launch URL`: no open Google Slides tab was found. Keep at least one `docs.google.com/presentation/d/...` tab open in Chrome.
 
 ## Global hotkey (while presenting)
 If you want a keyboard hotkey that works even when Chrome is fullscreen:
@@ -206,3 +231,9 @@ cp config/hammerspoon.init.lua.example ~/.hammerspoon/init.lua
 Notes:
 - Stream Deck can send the same hotkey if you prefer pressing a Stream Deck key.
 - Logs are written to `/tmp/slides-hotkey.log`.
+
+## Deck behavior
+With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any Google Slides deck:
+- Open the deck you want in Chrome.
+- Make it the active tab (recommended).
+- Press the hotkey or trigger script.

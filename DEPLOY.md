@@ -4,8 +4,13 @@ This guide gets this project running on one or two managed macOS presentation la
 
 ## 1) Clone the repo
 ```bash
-git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git
-cd auto_refresh_google_slides
+git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git "$HOME/auto_refresh_google_slides"
+cd "$HOME/auto_refresh_google_slides"
+```
+
+If already cloned:
+```bash
+git -C "$HOME/auto_refresh_google_slides" pull
 ```
 
 ## 2) Bootstrap machine files
@@ -17,7 +22,7 @@ That creates machine-local config files if missing and makes scripts executable.
 
 To also install and wire the global hotkey in one shot:
 ```bash
-./scripts/bootstrap_machine.sh --role presentation --install-hotkey
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
 ```
 
 ## 3) Configure this machine
@@ -34,6 +39,15 @@ Optional (already tuned fast/stable defaults):
 - `PRESENTER_READY_DELAY_SECONDS`
 - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS`
 
+Non-interactive way to set required values:
+```bash
+FILE="$HOME/auto_refresh_google_slides/config/local.env"
+grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
+grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
+grep -q '^PRIMARY_BOUNDS=' "$FILE" && sed -i '' 's|^PRIMARY_BOUNDS=.*|PRIMARY_BOUNDS="1920,25,3840,1080"|' "$FILE" || echo 'PRIMARY_BOUNDS="1920,25,3840,1080"' >> "$FILE"
+grep -q '^NOTES_BOUNDS=' "$FILE" && sed -i '' 's|^NOTES_BOUNDS=.*|NOTES_BOUNDS="0,25,1920,1080"|' "$FILE" || echo 'NOTES_BOUNDS="0,25,1920,1080"' >> "$FILE"
+```
+
 ## 4) macOS permissions
 Enable Accessibility for the app/process running automation:
 - `System Settings -> Privacy & Security -> Accessibility`
@@ -43,7 +57,7 @@ If using Hammerspoon hotkey, enable:
 
 ## 5) Validate local runner
 ```bash
-./scripts/slides_machine_runner.sh ./config/local.env
+"$HOME/auto_refresh_google_slides/scripts/slides_machine_runner.sh" "$HOME/auto_refresh_google_slides/config/local.env"
 ```
 
 Expected result:
@@ -53,7 +67,7 @@ Expected result:
 ## 6) Hotkey setup (optional)
 Recommended:
 ```bash
-./scripts/bootstrap_machine.sh --role presentation --install-hotkey
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
 ```
 
 Manual alternative:
@@ -66,6 +80,11 @@ dofile(os.getenv("HOME") .. "/.hammerspoon/slides_hotkey.lua")
 
 Default hotkey:
 - `ctrl+alt+cmd+r`
+
+Verification:
+```bash
+tail -n 60 /tmp/slides-hotkey.log
+```
 
 ## 7) Two-machine trigger options
 
