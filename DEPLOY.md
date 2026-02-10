@@ -13,6 +13,29 @@ If already cloned:
 git -C "$HOME/auto_refresh_google_slides" pull
 ```
 
+Single-command bootstrap (clone-or-update + hotkey + local config defaults):
+```bash
+set -euo pipefail
+REPO_DIR="$HOME/auto_refresh_google_slides"
+REPO_URL="https://github.com/gmcgrath86/auto_refresh_google_slides.git"
+
+if [ -d "$REPO_DIR/.git" ]; then
+  git -C "$REPO_DIR" pull --ff-only
+else
+  git clone "$REPO_URL" "$REPO_DIR"
+fi
+
+"$REPO_DIR/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+
+FILE="$REPO_DIR/config/local.env"
+grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
+grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
+grep -q '^PRIMARY_BOUNDS=' "$FILE" && sed -i '' 's|^PRIMARY_BOUNDS=.*|PRIMARY_BOUNDS="1920,25,3840,1080"|' "$FILE" || echo 'PRIMARY_BOUNDS="1920,25,3840,1080"' >> "$FILE"
+grep -q '^NOTES_BOUNDS=' "$FILE" && sed -i '' 's|^NOTES_BOUNDS=.*|NOTES_BOUNDS="0,25,1920,1080"|' "$FILE" || echo 'NOTES_BOUNDS="0,25,1920,1080"' >> "$FILE"
+
+echo "Done. Open a Google Slides tab in Chrome and press ctrl+alt+cmd+r."
+```
+
 ## 2) Bootstrap machine files
 ```bash
 ./scripts/bootstrap_machine.sh --role presentation
