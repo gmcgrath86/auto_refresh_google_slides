@@ -30,8 +30,10 @@ Optional config variables:
   LAUNCH_DELAY_SECONDS=1.0
   PRESENTER_READY_DELAY_SECONDS=5.0
   NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS=0.5
-  NOTES_ZOOM_STEPS=0
-  NOTES_ZOOM_STEP_DELAY_SECONDS=0.08
+  NOTES_PLUS_CLICK_STEPS=0
+  NOTES_PLUS_CLICK_DELAY_SECONDS=0.08
+  NOTES_PLUS_BUTTON_RIGHT_OFFSET=56
+  NOTES_PLUS_BUTTON_TOP_OFFSET=164
   OPEN_RETRY_COUNT=3
   OPEN_RETRY_DELAY_SECONDS=1.0
   WINDOW_WAIT_TIMEOUT_SECONDS=20
@@ -72,8 +74,10 @@ USE_PRESENTER_NOTES_SHORTCUT="${USE_PRESENTER_NOTES_SHORTCUT:-1}"
 LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-1.0}"
 PRESENTER_READY_DELAY_SECONDS="${PRESENTER_READY_DELAY_SECONDS:-5.0}"
 NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS="${NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS:-0.5}"
-NOTES_ZOOM_STEPS="${NOTES_ZOOM_STEPS:-0}"
-NOTES_ZOOM_STEP_DELAY_SECONDS="${NOTES_ZOOM_STEP_DELAY_SECONDS:-0.08}"
+NOTES_PLUS_CLICK_STEPS="${NOTES_PLUS_CLICK_STEPS:-${NOTES_ZOOM_STEPS:-0}}"
+NOTES_PLUS_CLICK_DELAY_SECONDS="${NOTES_PLUS_CLICK_DELAY_SECONDS:-${NOTES_ZOOM_STEP_DELAY_SECONDS:-0.08}}"
+NOTES_PLUS_BUTTON_RIGHT_OFFSET="${NOTES_PLUS_BUTTON_RIGHT_OFFSET:-56}"
+NOTES_PLUS_BUTTON_TOP_OFFSET="${NOTES_PLUS_BUTTON_TOP_OFFSET:-164}"
 OPEN_RETRY_COUNT="${OPEN_RETRY_COUNT:-3}"
 OPEN_RETRY_DELAY_SECONDS="${OPEN_RETRY_DELAY_SECONDS:-1.0}"
 WINDOW_WAIT_TIMEOUT_SECONDS="${WINDOW_WAIT_TIMEOUT_SECONDS:-20}"
@@ -287,8 +291,10 @@ export USE_PRESENTER_NOTES_SHORTCUT
 export LAUNCH_DELAY_SECONDS
 export PRESENTER_READY_DELAY_SECONDS
 export NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS
-export NOTES_ZOOM_STEPS
-export NOTES_ZOOM_STEP_DELAY_SECONDS
+export NOTES_PLUS_CLICK_STEPS
+export NOTES_PLUS_CLICK_DELAY_SECONDS
+export NOTES_PLUS_BUTTON_RIGHT_OFFSET
+export NOTES_PLUS_BUTTON_TOP_OFFSET
 export WINDOW_WAIT_TIMEOUT_SECONDS
 
 open_chrome_window() {
@@ -634,61 +640,60 @@ on setNotesWindowFullscreen(processName)
   return false
 end setNotesWindowFullscreen
 
-on zoomNotesWindow(processName, chromeAppName, zoomSteps, stepDelaySeconds)
-  if zoomSteps is less than or equal to 0 then
+on clickNotesPlusButton(processName, plusClicks, clickDelaySeconds, rightOffset, topOffset)
+  if plusClicks is less than or equal to 0 then
     return true
   end if
 
-  set focusedNotesWindow to false
+  set notesWindow to missing value
 
-  using terms from application "Google Chrome"
-    tell application chromeAppName
-      set chromeWindowCount to count of windows
-
-      repeat with i from 1 to chromeWindowCount
+  tell application "System Events"
+    tell process processName
+      repeat with oneWindow in windows
         set oneTitle to ""
-        set oneURL to ""
-
         try
-          set oneTitle to title of active tab of window i
+          set oneTitle to name of oneWindow
         end try
 
-        try
-          set oneURL to URL of active tab of window i
-        end try
-
-        if oneTitle contains "Presenter view" and oneURL starts with "about:blank" then
-          set index of window i to 1
-          activate
-          set focusedNotesWindow to true
+        if oneTitle contains "Presenter view" and oneTitle contains "Google Slides" then
+          set notesWindow to oneWindow
           exit repeat
         end if
       end repeat
     end tell
-  end using terms from
+  end tell
 
-  if focusedNotesWindow is false then
-    tell application "System Events"
-      tell process processName
-        set frontmost to true
-      end tell
-    end tell
+  if notesWindow is missing value then
+    return false
   end if
+
+  tell application "System Events"
+    tell process processName
+      set frontmost to true
+      my raiseWindow(processName, notesWindow)
+
+      set winPos to value of attribute "AXPosition" of notesWindow
+      set winSize to value of attribute "AXSize" of notesWindow
+    end tell
+  end tell
+
+  set clickX to (item 1 of winPos) + (item 1 of winSize) - rightOffset
+  set clickY to (item 2 of winPos) + topOffset
 
   delay 0.15
 
   tell application "System Events"
     tell process processName
       set frontmost to true
-      repeat zoomSteps times
-        keystroke "=" using {command down}
-        delay stepDelaySeconds
+      repeat plusClicks times
+        click at {clickX, clickY}
+        delay clickDelaySeconds
       end repeat
     end tell
   end tell
 
   return true
-end zoomNotesWindow
+end clickNotesPlusButton
 
 on clickWindowCenter(processName, targetWindow)
   tell application "System Events"
@@ -871,8 +876,10 @@ set fullscreenNotes to system attribute "FULLSCREEN_NOTES"
 set launchDelayRaw to system attribute "LAUNCH_DELAY_SECONDS"
 set presenterReadyDelayRaw to system attribute "PRESENTER_READY_DELAY_SECONDS"
 set notesShortcutRetryIntervalRaw to system attribute "NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS"
-set notesZoomStepsRaw to system attribute "NOTES_ZOOM_STEPS"
-set notesZoomStepDelayRaw to system attribute "NOTES_ZOOM_STEP_DELAY_SECONDS"
+set notesPlusClickStepsRaw to system attribute "NOTES_PLUS_CLICK_STEPS"
+set notesPlusClickDelayRaw to system attribute "NOTES_PLUS_CLICK_DELAY_SECONDS"
+set notesPlusButtonRightOffsetRaw to system attribute "NOTES_PLUS_BUTTON_RIGHT_OFFSET"
+set notesPlusButtonTopOffsetRaw to system attribute "NOTES_PLUS_BUTTON_TOP_OFFSET"
 set launchFromEditMode to system attribute "LAUNCH_FROM_EDIT_MODE"
 set expectNotesWindow to system attribute "EXPECT_NOTES_WINDOW"
 set notesViaShortcut to system attribute "USE_PRESENTER_NOTES_SHORTCUT"
@@ -881,8 +888,10 @@ set timeoutRaw to system attribute "WINDOW_WAIT_TIMEOUT_SECONDS"
 set launchDelay to launchDelayRaw as number
 set presenterReadyDelay to presenterReadyDelayRaw as number
 set notesShortcutRetryInterval to notesShortcutRetryIntervalRaw as number
-set notesZoomSteps to notesZoomStepsRaw as integer
-set notesZoomStepDelay to notesZoomStepDelayRaw as number
+set notesPlusClickSteps to notesPlusClickStepsRaw as integer
+set notesPlusClickDelay to notesPlusClickDelayRaw as number
+set notesPlusButtonRightOffset to notesPlusButtonRightOffsetRaw as integer
+set notesPlusButtonTopOffset to notesPlusButtonTopOffsetRaw as integer
 set waitTimeout to timeoutRaw as number
 
 set primaryBounds to csvToBounds(primaryBoundsCSV)
@@ -1008,8 +1017,8 @@ if fullscreenNotes is "1" and notesChromeIndex is not missing value then
   if notesFullscreenIndex is not missing value then
     my setNotesWindowFullscreen(chromeApp)
 
-    if notesZoomSteps > 0 then
-      my zoomNotesWindow(chromeApp, chromeApp, notesZoomSteps, notesZoomStepDelay)
+    if notesPlusClickSteps > 0 then
+      my clickNotesPlusButton(chromeApp, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
     end if
 
     delay launchDelay

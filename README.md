@@ -108,8 +108,10 @@ cp config/local.env.example config/local.env
   - `LAUNCH_DELAY_SECONDS` (post-action settle delay)
   - `PRESENTER_READY_DELAY_SECONDS` (max time to keep retrying notes shortcut)
   - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS` (retry interval for notes shortcut)
-  - `NOTES_ZOOM_STEPS` (number of notes-window zoom-in keypresses after fullscreen)
-  - `NOTES_ZOOM_STEP_DELAY_SECONDS` (delay between each notes zoom keypress)
+  - `NOTES_PLUS_CLICK_STEPS` (number of clicks on the notes `+` control after fullscreen)
+  - `NOTES_PLUS_CLICK_DELAY_SECONDS` (delay between notes `+` clicks)
+  - `NOTES_PLUS_BUTTON_RIGHT_OFFSET` (pixels from notes window right edge to `+` click point)
+  - `NOTES_PLUS_BUTTON_TOP_OFFSET` (pixels from notes window top edge to `+` click point)
 
 3. Make scripts executable:
 ```bash
