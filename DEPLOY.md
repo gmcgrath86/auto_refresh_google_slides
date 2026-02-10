@@ -61,6 +61,8 @@ Optional (already tuned fast/stable defaults):
 - `LAUNCH_DELAY_SECONDS`
 - `PRESENTER_READY_DELAY_SECONDS`
 - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS`
+- `NOTES_ZOOM_STEPS` (default `7` for larger presenter notes text)
+- `NOTES_ZOOM_STEP_DELAY_SECONDS`
 
 Non-interactive way to set required values:
 ```bash
