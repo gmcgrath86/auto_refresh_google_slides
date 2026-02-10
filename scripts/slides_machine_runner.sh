@@ -107,7 +107,7 @@ APPLESCRIPT
   )"
   direct_url="$(printf '%s' "$direct_url" | tr -d '\r\n')"
 
-  if [[ "$direct_url" =~ ^https?:// ]]; then
+  if [[ "$direct_url" =~ ^https?:// && "$direct_url" == *"docs.google.com/presentation/d/"* ]]; then
     printf '%s\n' "$direct_url"
     return 0
   fi
@@ -154,7 +154,7 @@ APPLESCRIPT
   sleep 0.15
   copied_url="$(pbpaste | tr -d '\r\n')"
 
-  if [[ "$copied_url" =~ ^https?:// ]]; then
+  if [[ "$copied_url" =~ ^https?:// && "$copied_url" == *"docs.google.com/presentation/d/"* ]]; then
     printf '%s\n' "$copied_url"
     return 0
   fi
