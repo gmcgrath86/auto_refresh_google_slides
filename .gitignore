@@ -1,0 +1,19 @@
+# Local runtime config (machine-specific)
+config/*.env
+!config/*.env.example
+
+# Temp/state/log artifacts
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# Common local output paths used by scripts
+/tmp/slides-hotkey.log
+/tmp/slides-relay-agent.log
+/tmp/slides-relay-agent.err.log
+/tmp/slides-hotkey.lock/
+
+# IDE/editor
+.vscode/
+.idea/

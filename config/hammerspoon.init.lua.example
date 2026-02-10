@@ -1,0 +1,49 @@
+-- Slides global hotkey (Hammerspoon)
+-- 1) Install Hammerspoon: brew install --cask hammerspoon
+-- 2) Copy this file to ~/.hammerspoon/init.lua (or paste into your existing init.lua)
+-- 3) Update projectRoot and hotkey below.
+
+local projectRoot = "/Users/gmcgrath/Documents/Codex Test/ChatGPT Atlas Mod?"
+local triggerScript = projectRoot .. "/scripts/slides_hotkey_trigger.sh"
+
+-- Choose mode: "local" (this machine only), "relay" (outbound-only cloud trigger), "ssh" (direct SSH trigger)
+local triggerMode = "local"
+
+-- Config file for selected mode
+local triggerConfig = projectRoot .. "/config/local.env"
+
+-- Global hotkey (works while Chrome is fullscreen)
+local hotkeyMods = {"ctrl", "alt", "cmd"}
+local hotkeyKey = "r"
+
+local function runSlidesTrigger()
+  local args = {"--mode", triggerMode, "--config", triggerConfig}
+
+  local task = hs.task.new(triggerScript, function(exitCode, stdOut, stdErr)
+    if exitCode == 0 then
+      hs.notify.new({ title = "Slides", informativeText = "Refresh triggered" }):send()
+    else
+      hs.notify.new({ title = "Slides", informativeText = "Refresh failed (" .. tostring(exitCode) .. ")" }):send()
+    end
+
+    if stdOut and #stdOut > 0 then
+      print(stdOut)
+    end
+
+    if stdErr and #stdErr > 0 then
+      print(stdErr)
+    end
+
+    return true
+  end, args)
+
+  if not task then
+    hs.notify.new({ title = "Slides", informativeText = "Failed to create hotkey task" }):send()
+    return
+  end
+
+  task:start()
+end
+
+hs.hotkey.bind(hotkeyMods, hotkeyKey, runSlidesTrigger)
+print("Slides hotkey ready: " .. table.concat(hotkeyMods, "+") .. "+" .. string.upper(hotkeyKey))
