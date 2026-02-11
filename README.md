@@ -110,8 +110,9 @@ cp config/local.env.example config/local.env
 - optional manual-only: `PRIMARY_BOUNDS`, `NOTES_BOUNDS`
 - optional timing tune:
   - `LAUNCH_DELAY_SECONDS` (post-action settle delay)
-  - `PRESENTER_READY_DELAY_SECONDS` (max time to keep retrying notes shortcut)
+  - `PRESENTER_READY_DELAY_SECONDS` (initial readiness target before note retries)
   - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS` (retry interval for notes shortcut)
+  - `NOTES_SHORTCUT_MAX_WAIT_SECONDS` (hard cap for notes shortcut retries; increase for very large decks)
   - `NOTES_PLUS_CLICK_STEPS` (number of clicks on the notes `+` control after fullscreen)
   - `NOTES_PLUS_METHOD` (`auto`, `js`, or `coords`)
   - `NOTES_PLUS_READY_DELAY_SECONDS` (delay after notes fullscreen before clicking `+`)

@@ -32,6 +32,7 @@ Optional config variables:
   LAUNCH_DELAY_SECONDS=1.0
   PRESENTER_READY_DELAY_SECONDS=5.0
   NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS=0.5
+  NOTES_SHORTCUT_MAX_WAIT_SECONDS=20
   NOTES_PLUS_CLICK_STEPS=0
   NOTES_PLUS_METHOD="auto"
   NOTES_PLUS_READY_DELAY_SECONDS=0.45
@@ -89,6 +90,7 @@ NOTES_PLUS_BUTTON_TOP_OFFSET="${NOTES_PLUS_BUTTON_TOP_OFFSET:-164}"
 OPEN_RETRY_COUNT="${OPEN_RETRY_COUNT:-3}"
 OPEN_RETRY_DELAY_SECONDS="${OPEN_RETRY_DELAY_SECONDS:-1.0}"
 WINDOW_WAIT_TIMEOUT_SECONDS="${WINDOW_WAIT_TIMEOUT_SECONDS:-20}"
+NOTES_SHORTCUT_MAX_WAIT_SECONDS="${NOTES_SHORTCUT_MAX_WAIT_SECONDS:-$WINDOW_WAIT_TIMEOUT_SECONDS}"
 
 SLIDES_PRESENT_URL="${SLIDES_PRESENT_URL:-}"
 SLIDES_NOTES_URL="${SLIDES_NOTES_URL:-}"
@@ -546,6 +548,7 @@ export USE_PRESENTER_NOTES_SHORTCUT
 export LAUNCH_DELAY_SECONDS
 export PRESENTER_READY_DELAY_SECONDS
 export NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS
+export NOTES_SHORTCUT_MAX_WAIT_SECONDS
 export NOTES_PLUS_CLICK_STEPS
 export NOTES_PLUS_METHOD
 export NOTES_PLUS_READY_DELAY_SECONDS
@@ -906,7 +909,7 @@ on hasNotesChromeWindow(chromeAppName)
           set oneURL to URL of active tab of window i
         end try
 
-        if oneTitle contains "Presenter view" and oneURL starts with "about:blank" then
+        if my isNotesChromeWindow(oneTitle, oneURL) then
           return true
         end if
       end repeat
@@ -926,6 +929,13 @@ on waitForNotesChromeWindow(chromeAppName, timeoutSeconds)
     delay 0.1
   end repeat
 end waitForNotesChromeWindow
+
+on isNotesChromeWindow(oneTitle, oneURL)
+  if oneTitle contains "Presenter view" then return true
+  if oneURL contains "presenter=true" then return true
+  if oneURL contains "/presenter" then return true
+  return false
+end isNotesChromeWindow
 
 on triggerNotesShortcutWithRetries(processName, chromeAppName, maxWaitSeconds, retryIntervalSeconds)
   set startedAt to current date
@@ -1097,6 +1107,7 @@ set fullscreenNotes to system attribute "FULLSCREEN_NOTES"
 set launchDelayRaw to system attribute "LAUNCH_DELAY_SECONDS"
 set presenterReadyDelayRaw to system attribute "PRESENTER_READY_DELAY_SECONDS"
 set notesShortcutRetryIntervalRaw to system attribute "NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS"
+set notesShortcutMaxWaitRaw to system attribute "NOTES_SHORTCUT_MAX_WAIT_SECONDS"
 set notesPlusClickStepsRaw to system attribute "NOTES_PLUS_CLICK_STEPS"
 set notesPlusMethodRaw to system attribute "NOTES_PLUS_METHOD"
 set notesPlusReadyDelayRaw to system attribute "NOTES_PLUS_READY_DELAY_SECONDS"
@@ -1111,6 +1122,7 @@ set timeoutRaw to system attribute "WINDOW_WAIT_TIMEOUT_SECONDS"
 set launchDelay to launchDelayRaw as number
 set presenterReadyDelay to presenterReadyDelayRaw as number
 set notesShortcutRetryInterval to notesShortcutRetryIntervalRaw as number
+set notesShortcutMaxWait to notesShortcutMaxWaitRaw as number
 set notesPlusClickSteps to notesPlusClickStepsRaw as integer
 set notesPlusReadyDelay to notesPlusReadyDelayRaw as number
 set notesPlusClickDelay to notesPlusClickDelayRaw as number
@@ -1129,6 +1141,16 @@ set notesBounds to csvToBounds(notesBoundsCSV)
 set notesMethodUsed to "skipped"
 set notesFallbackReason to ""
 set notesClickDetail to ""
+set notesWindowFound to false
+set notesWindowWaitResult to "not-requested"
+
+if notesShortcutMaxWait < presenterReadyDelay then
+  set notesShortcutMaxWait to presenterReadyDelay
+end if
+
+if notesShortcutMaxWait < notesShortcutRetryInterval then
+  set notesShortcutMaxWait to notesShortcutRetryInterval
+end if
 
 my waitForProcess(chromeApp, waitTimeout)
 my waitForWindowCount(chromeApp, 1, waitTimeout)
@@ -1147,14 +1169,34 @@ tell application "System Events"
     end if
 
     if notesViaShortcut is "1" then
-      my triggerNotesShortcutWithRetries(chromeApp, chromeApp, presenterReadyDelay, notesShortcutRetryInterval)
+      set shortcutOpened to my triggerNotesShortcutWithRetries(chromeApp, chromeApp, notesShortcutMaxWait, notesShortcutRetryInterval)
+      if shortcutOpened then
+        set notesWindowWaitResult to "shortcut-opened"
+      else
+        set notesWindowWaitResult to "shortcut-timeout"
+      end if
       delay launchDelay
     end if
   end tell
 end tell
 
 if expectNotesWindow is "1" then
-  my waitForNotesChromeWindow(chromeApp, waitTimeout)
+  set notesWindowFound to my waitForNotesChromeWindow(chromeApp, waitTimeout)
+  if notesWindowFound then
+    if notesWindowWaitResult is "not-requested" then
+      set notesWindowWaitResult to "wait-opened"
+    else if notesWindowWaitResult is "shortcut-opened" then
+      set notesWindowWaitResult to notesWindowWaitResult & "|confirmed"
+    end if
+  else
+    if notesWindowWaitResult is "not-requested" then
+      set notesWindowWaitResult to "wait-timeout"
+    else
+      set notesWindowWaitResult to notesWindowWaitResult & "|wait-timeout"
+    end if
+  end if
+else
+  set notesWindowFound to my hasNotesChromeWindow(chromeApp)
 end if
 
 set slidesChromeIndex to missing value
@@ -1176,7 +1218,7 @@ using terms from application "Google Chrome"
         set oneURL to URL of active tab of window i
       end try
 
-      if notesChromeIndex is missing value and oneTitle contains "Presenter view" and oneURL starts with "about:blank" then
+      if notesChromeIndex is missing value and my isNotesChromeWindow(oneTitle, oneURL) then
         set notesChromeIndex to i
       end if
 
@@ -1272,7 +1314,15 @@ if notesChromeIndex is not missing value then
   end if
 end if
 
-return "NOTES_METHOD_CONFIG=" & notesPlusMethod & linefeed & "NOTES_METHOD_USED=" & notesMethodUsed & linefeed & "NOTES_CLICK_DETAIL=" & notesClickDetail & linefeed & "NOTES_FALLBACK_REASON=" & notesFallbackReason
+if expectNotesWindow is "1" and notesChromeIndex is missing value then
+  if notesFallbackReason is "" then
+    set notesFallbackReason to "notes-window-not-found"
+  else
+    set notesFallbackReason to notesFallbackReason & " | notes-window-not-found"
+  end if
+end if
+
+return "NOTES_METHOD_CONFIG=" & notesPlusMethod & linefeed & "NOTES_METHOD_USED=" & notesMethodUsed & linefeed & "NOTES_CLICK_DETAIL=" & notesClickDetail & linefeed & "NOTES_WINDOW_EXPECTED=" & expectNotesWindow & linefeed & "NOTES_WINDOW_FOUND=" & notesWindowFound & linefeed & "NOTES_WINDOW_WAIT_RESULT=" & notesWindowWaitResult & linefeed & "NOTES_SHORTCUT_WAIT_SECONDS=" & notesShortcutMaxWait & linefeed & "NOTES_FALLBACK_REASON=" & notesFallbackReason
 APPLESCRIPT
 )"
 

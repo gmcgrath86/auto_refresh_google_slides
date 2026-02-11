@@ -62,6 +62,7 @@ Optional (already tuned fast/stable defaults):
 - `LAUNCH_DELAY_SECONDS`
 - `PRESENTER_READY_DELAY_SECONDS`
 - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS`
+- `NOTES_SHORTCUT_MAX_WAIT_SECONDS` (increase for very large decks or slower load)
 - `NOTES_PLUS_CLICK_STEPS` (default `7`, clicks notes `+` control)
 - `NOTES_PLUS_METHOD` (`auto`, `js`, or `coords`)
 - `NOTES_PLUS_READY_DELAY_SECONDS` (delay after notes fullscreen before clicking)
