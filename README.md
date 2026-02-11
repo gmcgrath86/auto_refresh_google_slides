@@ -28,7 +28,7 @@ REPO_DIR="$HOME/auto_refresh_google_slides"
 REPO_URL="https://github.com/gmcgrath86/auto_refresh_google_slides.git"
 
 if [ -d "$REPO_DIR/.git" ]; then
-  git -C "$REPO_DIR" pull --ff-only
+  git -C "$REPO_DIR" pull --ff-only --tags
 else
   git clone "$REPO_URL" "$REPO_DIR"
 fi
@@ -38,21 +38,23 @@ fi
 FILE="$REPO_DIR/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
 grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
-grep -q '^PRIMARY_BOUNDS=' "$FILE" && sed -i '' 's|^PRIMARY_BOUNDS=.*|PRIMARY_BOUNDS="1920,25,3840,1080"|' "$FILE" || echo 'PRIMARY_BOUNDS="1920,25,3840,1080"' >> "$FILE"
-grep -q '^NOTES_BOUNDS=' "$FILE" && sed -i '' 's|^NOTES_BOUNDS=.*|NOTES_BOUNDS="0,25,1920,1080"|' "$FILE" || echo 'NOTES_BOUNDS="0,25,1920,1080"' >> "$FILE"
+grep -q '^BOUNDS_MODE=' "$FILE" && sed -i '' 's|^BOUNDS_MODE=.*|BOUNDS_MODE="auto"|' "$FILE" || echo 'BOUNDS_MODE="auto"' >> "$FILE"
+grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"' >> "$FILE"
+grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTES_PLUS_METHOD="auto"|' "$FILE" || echo 'NOTES_PLUS_METHOD="auto"' >> "$FILE"
 
 tail -n 20 /tmp/slides-hotkey.log 2>/dev/null || true
 echo "Ready. Open a Google Slides tab in Chrome, then press ctrl+alt+cmd+r."
 ```
 
-Then set the four required local values:
+Then set the required local values:
 
 ```bash
 FILE="$HOME/auto_refresh_google_slides/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
 grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
-grep -q '^PRIMARY_BOUNDS=' "$FILE" && sed -i '' 's|^PRIMARY_BOUNDS=.*|PRIMARY_BOUNDS="1920,25,3840,1080"|' "$FILE" || echo 'PRIMARY_BOUNDS="1920,25,3840,1080"' >> "$FILE"
-grep -q '^NOTES_BOUNDS=' "$FILE" && sed -i '' 's|^NOTES_BOUNDS=.*|NOTES_BOUNDS="0,25,1920,1080"|' "$FILE" || echo 'NOTES_BOUNDS="0,25,1920,1080"' >> "$FILE"
+grep -q '^BOUNDS_MODE=' "$FILE" && sed -i '' 's|^BOUNDS_MODE=.*|BOUNDS_MODE="auto"|' "$FILE" || echo 'BOUNDS_MODE="auto"' >> "$FILE"
+grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"' >> "$FILE"
+grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTES_PLUS_METHOD="auto"|' "$FILE" || echo 'NOTES_PLUS_METHOD="auto"' >> "$FILE"
 ```
 
 Final checks:
@@ -72,6 +74,7 @@ One Stream Deck button can:
 - `scripts/slides_hotkey_trigger.sh`: Hotkey-safe wrapper with lock/logging that can call local/relay/ssh triggers.
 - `scripts/bootstrap_machine.sh`: Creates machine-local config files and normalizes script permissions.
 - `scripts/get_chrome_front_window_bounds.sh`: Prints front Chrome window bounds for calibration.
+- `scripts/calibrate_notes_plus.sh`: Captures exact notes `+` offsets from live mouse position.
 - `scripts/slides_streamdeck_trigger.sh`: SSH orchestrator (local + remote SSH).
 - `scripts/slides_relay_streamdeck_trigger.sh`: Relay orchestrator (local + cloud event post).
 - `scripts/slides_relay_agent.sh`: Polling agent each laptop runs to react to relay events.
@@ -102,13 +105,16 @@ cp config/local.env.example config/local.env
 - `SLIDES_SOURCE_URL` (recommended; your normal `/edit` deck URL)
 - optionally `SLIDES_PRESENT_URL` if you want to bypass auto-derivation
 - optionally `SLIDES_NOTES_URL` if you don't want shortcut-generated notes
-- `PRIMARY_BOUNDS`
-- `NOTES_BOUNDS`
+- `BOUNDS_MODE` (`auto` recommended, `manual` available)
+- `DISPLAY_ASSIGNMENT` (`slides:rightmost,notes:leftmost`)
+- optional manual-only: `PRIMARY_BOUNDS`, `NOTES_BOUNDS`
 - optional timing tune:
   - `LAUNCH_DELAY_SECONDS` (post-action settle delay)
   - `PRESENTER_READY_DELAY_SECONDS` (max time to keep retrying notes shortcut)
   - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS` (retry interval for notes shortcut)
   - `NOTES_PLUS_CLICK_STEPS` (number of clicks on the notes `+` control after fullscreen)
+  - `NOTES_PLUS_METHOD` (`auto`, `js`, or `coords`)
+  - `NOTES_PLUS_READY_DELAY_SECONDS` (delay after notes fullscreen before clicking `+`)
   - `NOTES_PLUS_CLICK_DELAY_SECONDS` (delay between notes `+` clicks)
   - `NOTES_PLUS_BUTTON_RIGHT_OFFSET` (pixels from notes window right edge to `+` click point)
   - `NOTES_PLUS_BUTTON_TOP_OFFSET` (pixels from notes window top edge to `+` click point)
@@ -118,15 +124,18 @@ cp config/local.env.example config/local.env
 chmod +x scripts/*.sh
 ```
 
-4. Calibrate bounds (run on each machine):
+4. (Optional) calibrate notes `+` offsets:
 ```bash
-./scripts/get_chrome_front_window_bounds.sh
+./scripts/calibrate_notes_plus.sh ./config/local.env
 ```
 
 5. Local runner test:
 ```bash
 ./scripts/slides_machine_runner.sh ./config/local.env
 ```
+
+6. For best JS notes-click reliability, enable in Chrome:
+- `View -> Developer -> Allow JavaScript from Apple Events`
 
 ## Relay mode (recommended for blocked sharing)
 
@@ -216,6 +225,7 @@ cp config/controller.env.example config/controller.env
 ## Troubleshooting
 - Fullscreen toggle fails: Accessibility permission missing.
 - Wrong monitor placement: recalibrate bounds.
+- Notes resize used coordinate fallback: enable `View -> Developer -> Allow JavaScript from Apple Events` in Chrome.
 - Relay agent not triggering: verify `RELAY_URL`, `RELAY_SECRET`, and that `doGet` returns JSON with `ok:true`.
 - Repeated triggering on startup: keep `FIRE_ON_STARTUP=0`.
 - `Access Denied` in Chrome: the deck URL/account pair is not accessible in that Chrome profile. Open a deck that works in that profile and set `SLIDES_SOURCE_URL` to that URL.

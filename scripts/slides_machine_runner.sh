@@ -14,6 +14,8 @@ Input URL options:
 Optional config variables:
   CHROME_APP="Google Chrome"
   CHROME_PROFILE="Default"
+  BOUNDS_MODE="auto"
+  DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"
   PRIMARY_BOUNDS="0,25,1920,1080"
   NOTES_BOUNDS="1920,25,3840,1080"
   FULLSCREEN_PRIMARY=1
@@ -31,6 +33,8 @@ Optional config variables:
   PRESENTER_READY_DELAY_SECONDS=5.0
   NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS=0.5
   NOTES_PLUS_CLICK_STEPS=0
+  NOTES_PLUS_METHOD="auto"
+  NOTES_PLUS_READY_DELAY_SECONDS=0.45
   NOTES_PLUS_CLICK_DELAY_SECONDS=0.08
   NOTES_PLUS_BUTTON_RIGHT_OFFSET=56
   NOTES_PLUS_BUTTON_TOP_OFFSET=164
@@ -58,6 +62,8 @@ fi
 
 CHROME_APP="${CHROME_APP:-Google Chrome}"
 CHROME_PROFILE="${CHROME_PROFILE:-Default}"
+BOUNDS_MODE="${BOUNDS_MODE:-auto}"
+DISPLAY_ASSIGNMENT="${DISPLAY_ASSIGNMENT:-slides:rightmost,notes:leftmost}"
 PRIMARY_BOUNDS="${PRIMARY_BOUNDS:-0,25,1920,1080}"
 NOTES_BOUNDS="${NOTES_BOUNDS:-1920,25,3840,1080}"
 FULLSCREEN_PRIMARY="${FULLSCREEN_PRIMARY:-1}"
@@ -75,6 +81,8 @@ LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-1.0}"
 PRESENTER_READY_DELAY_SECONDS="${PRESENTER_READY_DELAY_SECONDS:-5.0}"
 NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS="${NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS:-0.5}"
 NOTES_PLUS_CLICK_STEPS="${NOTES_PLUS_CLICK_STEPS:-${NOTES_ZOOM_STEPS:-0}}"
+NOTES_PLUS_METHOD="${NOTES_PLUS_METHOD:-auto}"
+NOTES_PLUS_READY_DELAY_SECONDS="${NOTES_PLUS_READY_DELAY_SECONDS:-0.45}"
 NOTES_PLUS_CLICK_DELAY_SECONDS="${NOTES_PLUS_CLICK_DELAY_SECONDS:-${NOTES_ZOOM_STEP_DELAY_SECONDS:-0.08}}"
 NOTES_PLUS_BUTTON_RIGHT_OFFSET="${NOTES_PLUS_BUTTON_RIGHT_OFFSET:-56}"
 NOTES_PLUS_BUTTON_TOP_OFFSET="${NOTES_PLUS_BUTTON_TOP_OFFSET:-164}"
@@ -87,6 +95,18 @@ SLIDES_NOTES_URL="${SLIDES_NOTES_URL:-}"
 SLIDES_SOURCE_URL="${SLIDES_SOURCE_URL:-}"
 SLIDES_LAUNCH_URL=""
 SOURCE_DECK_ID=""
+DISPLAY_COUNT=""
+BOUNDS_SOURCE=""
+
+if [[ "$BOUNDS_MODE" != "auto" && "$BOUNDS_MODE" != "manual" ]]; then
+  echo "Invalid BOUNDS_MODE=$BOUNDS_MODE (expected auto or manual)" >&2
+  exit 1
+fi
+
+if [[ "$NOTES_PLUS_METHOD" != "auto" && "$NOTES_PLUS_METHOD" != "js" && "$NOTES_PLUS_METHOD" != "coords" ]]; then
+  echo "Invalid NOTES_PLUS_METHOD=$NOTES_PLUS_METHOD (expected auto, js, or coords)" >&2
+  exit 1
+fi
 
 append_cache_buster() {
   local url="$1"
@@ -237,6 +257,236 @@ ensure_show_notes_param() {
   fi
 }
 
+resolve_runtime_bounds() {
+  local swift_out=""
+  local line key value
+  local resolved_slides=""
+  local resolved_notes=""
+  local resolved_count=""
+  local resolved_source=""
+
+  swift_out="$(
+    BOUNDS_MODE_RUNTIME="$BOUNDS_MODE" \
+    DISPLAY_ASSIGNMENT_RUNTIME="$DISPLAY_ASSIGNMENT" \
+    PRIMARY_BOUNDS_RUNTIME="$PRIMARY_BOUNDS" \
+    NOTES_BOUNDS_RUNTIME="$NOTES_BOUNDS" \
+    swift - <<\SWIFT
+import AppKit
+import Foundation
+
+struct Bounds {
+  var left: Int
+  var top: Int
+  var right: Int
+  var bottom: Int
+
+  var width: Int { right - left }
+  var height: Int { bottom - top }
+
+  func csv() -> String {
+    "\(left),\(top),\(right),\(bottom)"
+  }
+}
+
+func parseBounds(_ csv: String) -> Bounds? {
+  let trimmed = csv.trimmingCharacters(in: .whitespacesAndNewlines)
+  if trimmed.isEmpty { return nil }
+
+  let pieces = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+  if pieces.count != 4 { return nil }
+
+  guard
+    let left = Int(pieces[0]),
+    let top = Int(pieces[1]),
+    let right = Int(pieces[2]),
+    let bottom = Int(pieces[3]),
+    right > left,
+    bottom > top
+  else {
+    return nil
+  }
+
+  return Bounds(left: left, top: top, right: right, bottom: bottom)
+}
+
+func intersectionArea(_ a: Bounds, _ b: Bounds) -> Int {
+  let interLeft = max(a.left, b.left)
+  let interTop = max(a.top, b.top)
+  let interRight = min(a.right, b.right)
+  let interBottom = min(a.bottom, b.bottom)
+
+  let width = max(0, interRight - interLeft)
+  let height = max(0, interBottom - interTop)
+  return width * height
+}
+
+func centerDistanceSquared(_ a: Bounds, _ b: Bounds) -> Double {
+  let ax = Double(a.left + a.right) / 2.0
+  let ay = Double(a.top + a.bottom) / 2.0
+  let bx = Double(b.left + b.right) / 2.0
+  let by = Double(b.top + b.bottom) / 2.0
+  let dx = ax - bx
+  let dy = ay - by
+  return (dx * dx) + (dy * dy)
+}
+
+func clampBounds(_ input: Bounds, to screens: [Bounds]) -> Bounds {
+  if screens.isEmpty { return input }
+
+  var selected = screens[0]
+  var bestArea = -1
+
+  for screen in screens {
+    let area = intersectionArea(input, screen)
+    if area > bestArea {
+      bestArea = area
+      selected = screen
+    }
+  }
+
+  if bestArea <= 0 {
+    selected = screens.min(by: { centerDistanceSquared(input, $0) < centerDistanceSquared(input, $1) }) ?? selected
+  }
+
+  let screenWidth = max(1, selected.width)
+  let screenHeight = max(1, selected.height)
+
+  var targetWidth = input.width
+  var targetHeight = input.height
+  if targetWidth <= 0 { targetWidth = screenWidth }
+  if targetHeight <= 0 { targetHeight = screenHeight }
+
+  targetWidth = min(targetWidth, screenWidth)
+  targetHeight = min(targetHeight, screenHeight)
+
+  let maxLeft = selected.right - targetWidth
+  let maxTop = selected.bottom - targetHeight
+
+  let clampedLeft = min(max(input.left, selected.left), maxLeft)
+  let clampedTop = min(max(input.top, selected.top), maxTop)
+
+  return Bounds(
+    left: clampedLeft,
+    top: clampedTop,
+    right: clampedLeft + targetWidth,
+    bottom: clampedTop + targetHeight
+  )
+}
+
+func visibleBoundsForScreen(_ screen: NSScreen) -> Bounds {
+  let frame = screen.frame
+  let visible = screen.visibleFrame
+
+  let left = Int(round(visible.minX))
+  let right = Int(round(visible.maxX))
+  let top = Int(round(frame.maxY - visible.maxY))
+  let bottom = Int(round(frame.maxY - visible.minY))
+
+  return Bounds(left: left, top: top, right: right, bottom: bottom)
+}
+
+func parseAssignment(_ assignment: String) -> (slides: String, notes: String) {
+  var slides = "rightmost"
+  var notes = "leftmost"
+
+  for chunk in assignment.split(separator: ",") {
+    let pair = chunk.split(separator: ":", maxSplits: 1)
+    if pair.count != 2 { continue }
+    let key = pair[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let value = pair[1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if key == "slides" { slides = value }
+    if key == "notes" { notes = value }
+  }
+
+  return (slides, notes)
+}
+
+func pickScreen(named token: String, screens: [Bounds], main: Bounds) -> Bounds {
+  if screens.isEmpty { return main }
+  let lowered = token.lowercased()
+  switch lowered {
+  case "leftmost":
+    return screens.min(by: { $0.left < $1.left }) ?? main
+  case "rightmost":
+    return screens.max(by: { $0.left < $1.left }) ?? main
+  case "primary", "main":
+    return main
+  default:
+    return main
+  }
+}
+
+let env = ProcessInfo.processInfo.environment
+let modeRaw = (env["BOUNDS_MODE_RUNTIME"] ?? "auto").lowercased()
+let mode = (modeRaw == "manual") ? "manual" : "auto"
+let assignment = env["DISPLAY_ASSIGNMENT_RUNTIME"] ?? "slides:rightmost,notes:leftmost"
+let manualPrimary = env["PRIMARY_BOUNDS_RUNTIME"] ?? ""
+let manualNotes = env["NOTES_BOUNDS_RUNTIME"] ?? ""
+
+let screens = NSScreen.screens
+if screens.isEmpty {
+  fputs("No displays detected by NSScreen.\n", stderr)
+  exit(1)
+}
+
+let visibleScreens = screens.map { visibleBoundsForScreen($0) }
+let mainVisible = visibleBoundsForScreen(NSScreen.main ?? screens[0])
+let displayCount = visibleScreens.count
+
+let assignmentTokens = parseAssignment(assignment)
+var slidesCandidate: Bounds
+var notesCandidate: Bounds
+
+if displayCount <= 1 {
+  slidesCandidate = mainVisible
+  notesCandidate = mainVisible
+} else {
+  slidesCandidate = pickScreen(named: assignmentTokens.slides, screens: visibleScreens, main: mainVisible)
+  notesCandidate = pickScreen(named: assignmentTokens.notes, screens: visibleScreens, main: mainVisible)
+}
+
+var sourceLabel = "auto"
+if mode == "manual" {
+  sourceLabel = "manual_clamped"
+  if let parsed = parseBounds(manualPrimary) {
+    slidesCandidate = parsed
+  }
+  if let parsed = parseBounds(manualNotes) {
+    notesCandidate = parsed
+  }
+}
+
+let slidesFinal = clampBounds(slidesCandidate, to: visibleScreens)
+let notesFinal = clampBounds(notesCandidate, to: visibleScreens)
+
+print("DISPLAY_COUNT=\(displayCount)")
+print("BOUNDS_SOURCE=\(sourceLabel)")
+print("SLIDES_BOUNDS=\(slidesFinal.csv())")
+print("NOTES_BOUNDS=\(notesFinal.csv())")
+SWIFT
+  )"
+
+  while IFS='=' read -r key value; do
+    case "$key" in
+      DISPLAY_COUNT) resolved_count="$value" ;;
+      BOUNDS_SOURCE) resolved_source="$value" ;;
+      SLIDES_BOUNDS) resolved_slides="$value" ;;
+      NOTES_BOUNDS) resolved_notes="$value" ;;
+    esac
+  done <<< "$swift_out"
+
+  if [[ -z "$resolved_slides" || -z "$resolved_notes" || -z "$resolved_count" ]]; then
+    echo "Failed to resolve runtime bounds." >&2
+    echo "$swift_out" >&2
+    exit 1
+  fi
+
+  PRIMARY_BOUNDS="$resolved_slides"
+  NOTES_BOUNDS="$resolved_notes"
+  DISPLAY_COUNT="$resolved_count"
+  BOUNDS_SOURCE="${resolved_source:-auto}"
+}
+
 if [[ -z "$SLIDES_SOURCE_URL" && "$AUTO_CAPTURE_FRONT_TAB" == "1" ]]; then
   SLIDES_SOURCE_URL="$(capture_front_tab_url || true)"
 fi
@@ -280,7 +530,12 @@ if [[ "$CACHE_BUST" == "1" ]]; then
   fi
 fi
 
+resolve_runtime_bounds
+echo "[slides_machine_runner] bounds source=$BOUNDS_SOURCE displays=$DISPLAY_COUNT slides=$PRIMARY_BOUNDS notes=$NOTES_BOUNDS"
+
 export CHROME_APP
+export BOUNDS_MODE
+export DISPLAY_ASSIGNMENT
 export PRIMARY_BOUNDS
 export NOTES_BOUNDS
 export FULLSCREEN_PRIMARY
@@ -292,6 +547,8 @@ export LAUNCH_DELAY_SECONDS
 export PRESENTER_READY_DELAY_SECONDS
 export NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS
 export NOTES_PLUS_CLICK_STEPS
+export NOTES_PLUS_METHOD
+export NOTES_PLUS_READY_DELAY_SECONDS
 export NOTES_PLUS_CLICK_DELAY_SECONDS
 export NOTES_PLUS_BUTTON_RIGHT_OFFSET
 export NOTES_PLUS_BUTTON_TOP_OFFSET
@@ -538,12 +795,13 @@ else
   EXPECT_NOTES_WINDOW=0
 fi
 
-/usr/bin/osascript <<'APPLESCRIPT'
+apple_summary="$(
+/usr/bin/osascript <<\APPLESCRIPT
 on csvToBounds(csvText)
-  set oldDelims to AppleScript's text item delimiters
-  set AppleScript's text item delimiters to ","
+  set oldDelims to text item delimiters of AppleScript
+  set text item delimiters of AppleScript to ","
   set rawParts to text items of csvText
-  set AppleScript's text item delimiters to oldDelims
+  set text item delimiters of AppleScript to oldDelims
 
   if (count of rawParts) is not 4 then
     error "Bounds must be 4 comma-separated integers: " & csvText
@@ -557,143 +815,13 @@ on csvToBounds(csvText)
   return outList
 end csvToBounds
 
-on setWindowBounds(processName, targetWindow, boundValues)
-  set leftEdge to item 1 of boundValues
-  set topEdge to item 2 of boundValues
-  set rightEdge to item 3 of boundValues
-  set bottomEdge to item 4 of boundValues
-
-  set targetWidth to rightEdge - leftEdge
-  set targetHeight to bottomEdge - topEdge
-
-  tell application "System Events"
-    tell process processName
-      set value of attribute "AXPosition" of targetWindow to {leftEdge, topEdge}
-      set value of attribute "AXSize" of targetWindow to {targetWidth, targetHeight}
-    end tell
-  end tell
-end setWindowBounds
-
-on raiseWindow(processName, targetWindow)
-  tell application "System Events"
-    tell process processName
-      try
-        perform action "AXRaise" of targetWindow
-      on error
-        set frontmost to true
-      end try
-    end tell
-  end tell
-end raiseWindow
-
-on setWindowFullscreen(processName, targetWindow)
-  tell application "System Events"
-    tell process processName
-      try
-        set value of attribute "AXFullScreen" of targetWindow to true
-      on error
-        my raiseWindow(processName, targetWindow)
-        delay 0.15
-        keystroke "f" using {command down, control down}
-      end try
-    end tell
-  end tell
-end setWindowFullscreen
-
-on setSlidesWindowFullscreen(processName)
-  tell application "System Events"
-    tell process processName
-      repeat with oneWindow in windows
-        set oneTitle to ""
-        try
-          set oneTitle to name of oneWindow
-        end try
-
-        if oneTitle contains "Google Slides" and oneTitle does not contain "Presenter view" then
-          my setWindowFullscreen(processName, oneWindow)
-          return true
-        end if
-      end repeat
-    end tell
-  end tell
-
-  return false
-end setSlidesWindowFullscreen
-
-on setNotesWindowFullscreen(processName)
-  tell application "System Events"
-    tell process processName
-      repeat with oneWindow in windows
-        set oneTitle to ""
-        try
-          set oneTitle to name of oneWindow
-        end try
-
-        if oneTitle contains "Presenter view" and oneTitle contains "Google Slides" then
-          my setWindowFullscreen(processName, oneWindow)
-          return true
-        end if
-      end repeat
-    end tell
-  end tell
-
-  return false
-end setNotesWindowFullscreen
-
-on clickNotesPlusButton(processName, plusClicks, clickDelaySeconds, rightOffset, topOffset)
-  if plusClicks is less than or equal to 0 then
-    return true
-  end if
-
-  set notesWindow to missing value
-
-  tell application "System Events"
-    tell process processName
-      repeat with oneWindow in windows
-        set oneTitle to ""
-        try
-          set oneTitle to name of oneWindow
-        end try
-
-        if oneTitle contains "Presenter view" and oneTitle contains "Google Slides" then
-          set notesWindow to oneWindow
-          exit repeat
-        end if
-      end repeat
-    end tell
-  end tell
-
-  if notesWindow is missing value then
-    return false
-  end if
-
-  tell application "System Events"
-    tell process processName
-      set frontmost to true
-      my raiseWindow(processName, notesWindow)
-
-      set winPos to value of attribute "AXPosition" of notesWindow
-      set winSize to value of attribute "AXSize" of notesWindow
-    end tell
-  end tell
-
-  set clickX to (item 1 of winPos) + (item 1 of winSize) - rightOffset
-  set clickY to (item 2 of winPos) + topOffset
-
-  delay 0.15
-
-  tell application "System Events"
-    tell process processName
-      set frontmost to true
-      repeat plusClicks times
-        click at {clickX, clickY}
-        delay clickDelaySeconds
-      end repeat
-    end tell
-  end tell
-
-  return true
-end clickNotesPlusButton
+on startsWith(valueText, prefixText)
+  set valueLength to length of valueText
+  set prefixLength to length of prefixText
+  if prefixLength is greater than valueLength then return false
+  if prefixLength is 0 then return true
+  return (text 1 thru prefixLength of valueText) is prefixText
+end startsWith
 
 on clickWindowCenter(processName, targetWindow)
   tell application "System Events"
@@ -714,6 +842,31 @@ on clickWindowCenter(processName, targetWindow)
   end tell
 end clickWindowCenter
 
+on clickFrontWindowCenter(processName)
+  tell application "System Events"
+    tell process processName
+      if (count of windows) is 0 then
+        return false
+      end if
+      set frontWindowRef to window 1
+      set winPos to value of attribute "AXPosition" of frontWindowRef
+      set winSize to value of attribute "AXSize" of frontWindowRef
+    end tell
+  end tell
+
+  set clickX to (item 1 of winPos) + ((item 1 of winSize) div 2)
+  set clickY to (item 2 of winPos) + ((item 2 of winSize) div 2)
+
+  tell application "System Events"
+    tell process processName
+      set frontmost to true
+      click at {clickX, clickY}
+    end tell
+  end tell
+
+  return true
+end clickFrontWindowCenter
+
 on waitForWindowCount(processName, minCount, timeoutSeconds)
   set startedAt to current date
 
@@ -727,9 +880,7 @@ on waitForWindowCount(processName, minCount, timeoutSeconds)
       end tell
     end try
 
-    if currentCount is greater than or equal to minCount then
-      return
-    end if
+    if currentCount is greater than or equal to minCount then return
 
     if (current date) - startedAt > timeoutSeconds then
       error "Timed out waiting for " & minCount & " Chrome window(s)."
@@ -739,51 +890,10 @@ on waitForWindowCount(processName, minCount, timeoutSeconds)
   end repeat
 end waitForWindowCount
 
-on waitForNotesWindowOrTimeout(processName, minCount, timeoutSeconds)
-  set startedAt to current date
-
-  repeat
-    set currentCount to 0
-    set foundPresenterWindow to false
-
-    try
-      tell application "System Events"
-        tell process processName
-          set currentCount to count of windows
-
-          repeat with oneWindow in windows
-            try
-              if (name of oneWindow) contains "Presenter view" then
-                set foundPresenterWindow to true
-                exit repeat
-              end if
-            end try
-          end repeat
-        end tell
-      end tell
-    end try
-
-    if currentCount is greater than or equal to minCount then
-      return
-    end if
-
-    if foundPresenterWindow is true then
-      return
-    end if
-
-    if (current date) - startedAt > timeoutSeconds then
-      return
-    end if
-
-    delay 0.1
-  end repeat
-end waitForNotesWindowOrTimeout
-
 on hasNotesChromeWindow(chromeAppName)
   using terms from application "Google Chrome"
     tell application chromeAppName
       set chromeWindowCount to count of windows
-
       repeat with i from 1 to chromeWindowCount
         set oneTitle to ""
         set oneURL to ""
@@ -810,27 +920,20 @@ on waitForNotesChromeWindow(chromeAppName, timeoutSeconds)
   set startedAt to current date
 
   repeat
-    if my hasNotesChromeWindow(chromeAppName) then
-      return true
-    end if
+    if my hasNotesChromeWindow(chromeAppName) then return true
 
-    if (current date) - startedAt > timeoutSeconds then
-      return false
-    end if
-
+    if (current date) - startedAt > timeoutSeconds then return false
     delay 0.1
   end repeat
 end waitForNotesChromeWindow
 
-on triggerNotesShortcutWithRetries(processName, chromeAppName, slidesWindow, maxWaitSeconds, retryIntervalSeconds)
+on triggerNotesShortcutWithRetries(processName, chromeAppName, maxWaitSeconds, retryIntervalSeconds)
   set startedAt to current date
 
   repeat
-    if my hasNotesChromeWindow(chromeAppName) then
-      return true
-    end if
+    if my hasNotesChromeWindow(chromeAppName) then return true
 
-    my clickWindowCenter(processName, slidesWindow)
+    my clickFrontWindowCenter(processName)
     tell application "System Events"
       tell process processName
         set frontmost to true
@@ -840,13 +943,8 @@ on triggerNotesShortcutWithRetries(processName, chromeAppName, slidesWindow, max
 
     delay retryIntervalSeconds
 
-    if my hasNotesChromeWindow(chromeAppName) then
-      return true
-    end if
-
-    if (current date) - startedAt > maxWaitSeconds then
-      return false
-    end if
+    if my hasNotesChromeWindow(chromeAppName) then return true
+    if (current date) - startedAt > maxWaitSeconds then return false
   end repeat
 end triggerNotesShortcutWithRetries
 
@@ -855,9 +953,7 @@ on waitForProcess(processName, timeoutSeconds)
 
   repeat
     tell application "System Events"
-      if exists process processName then
-        return
-      end if
+      if exists process processName then return
     end tell
 
     if (current date) - startedAt > timeoutSeconds then
@@ -868,6 +964,131 @@ on waitForProcess(processName, timeoutSeconds)
   end repeat
 end waitForProcess
 
+on setChromeWindowMode(chromeAppName, processName, windowIndex, modeName)
+  if windowIndex is missing value then return false
+
+  try
+    using terms from application "Google Chrome"
+      tell application chromeAppName
+        activate
+        set index of window windowIndex to 1
+        delay 0.08
+        set mode of window 1 to modeName
+      end tell
+    end using terms from
+    return true
+  on error
+    if modeName is "fullscreen" then
+      tell application "System Events"
+        tell process processName
+          set frontmost to true
+          keystroke "f" using {command down, control down}
+        end tell
+      end tell
+      return true
+    end if
+  end try
+
+  return false
+end setChromeWindowMode
+
+on clickNotesPlusViaJavascript(chromeAppName, notesWindowIndex, plusClicks)
+  if plusClicks is less than or equal to 0 then return "skipped:steps"
+
+  set jsSource to "(() => {" & return & ¬
+    "  const steps = " & plusClicks & ";" & return & ¬
+    "  const normalize = (v) => String(v || \"\").toLowerCase();" & return & ¬
+    "  const visible = (el) => {" & return & ¬
+    "    if (!el) return false;" & return & ¬
+    "    const r = el.getBoundingClientRect();" & return & ¬
+    "    return r.width > 0 && r.height > 0;" & return & ¬
+    "  };" & return & ¬
+    "  const scoreButton = (el) => {" & return & ¬
+    "    const text = normalize(el.textContent).trim();" & return & ¬
+    "    const aria = normalize(el.getAttribute(\"aria-label\"));" & return & ¬
+    "    const title = normalize(el.getAttribute(\"title\"));" & return & ¬
+    "    const blob = text + \" \" + aria + \" \" + title;" & return & ¬
+    "    let score = 0;" & return & ¬
+    "    if (text === \"+\") score += 6;" & return & ¬
+    "    if (blob.includes(\"plus\")) score += 5;" & return & ¬
+    "    if (blob.includes(\"increase\")) score += 4;" & return & ¬
+    "    if (blob.includes(\"font\")) score += 4;" & return & ¬
+    "    if (blob.includes(\"zoom\")) score += 3;" & return & ¬
+    "    if (blob.includes(\"text\")) score += 2;" & return & ¬
+    "    const r = el.getBoundingClientRect();" & return & ¬
+    "    if (r.left > window.innerWidth * 0.55) score += 2;" & return & ¬
+    "    if (r.top < window.innerHeight * 0.4) score += 2;" & return & ¬
+    "    return score;" & return & ¬
+    "  };" & return & ¬
+    "  const candidates = Array.from(document.querySelectorAll(\"button,[role=\\\"button\\\"]\")).filter(visible);" & return & ¬
+    "  if (!candidates.length) return \"not-found:no-visible-buttons\";" & return & ¬
+    "  const ranked = candidates" & return & ¬
+    "    .map((el) => ({el, score: scoreButton(el)}))" & return & ¬
+    "    .filter((entry) => entry.score > 0)" & return & ¬
+    "    .sort((a, b) => b.score - a.score);" & return & ¬
+    "  if (!ranked.length) return \"not-found:no-plus-candidate\";" & return & ¬
+    "  const target = ranked[0].el;" & return & ¬
+    "  const rect = target.getBoundingClientRect();" & return & ¬
+    "  target.scrollIntoView({block:\"nearest\", inline:\"nearest\"});" & return & ¬
+    "  target.focus();" & return & ¬
+    "  for (let i = 0; i < steps; i += 1) target.click();" & return & ¬
+    "  return \"clicked:\" + steps + \":x=\" + Math.round(rect.left) + \":y=\" + Math.round(rect.top) + \":source=js\";" & return & ¬
+    "})();"
+
+  try
+    using terms from application "Google Chrome"
+      tell application chromeAppName
+        set jsResult to execute active tab of window notesWindowIndex javascript jsSource
+      end tell
+    end using terms from
+    if jsResult is missing value then return "not-found:missing-result"
+    return jsResult as text
+  on error errMsg number errNum
+    return "error " & errNum & ": " & errMsg
+  end try
+end clickNotesPlusViaJavascript
+
+on clickNotesPlusByBounds(processName, boundValues, plusClicks, clickDelaySeconds, rightOffset, topOffset, sourceLabel)
+  if plusClicks is less than or equal to 0 then return "skipped:steps"
+
+  set leftEdge to item 1 of boundValues
+  set topEdge to item 2 of boundValues
+  set rightEdge to item 3 of boundValues
+
+  set clickX to rightEdge - rightOffset
+  set clickY to topEdge + topOffset
+  set clickXInt to clickX as integer
+  set clickYInt to clickY as integer
+
+  tell application "System Events"
+    tell process processName
+      set frontmost to true
+      repeat plusClicks times
+        click at {clickXInt, clickYInt}
+        delay clickDelaySeconds
+      end repeat
+    end tell
+  end tell
+
+  return "clicked:" & plusClicks & ":x=" & clickXInt & ":y=" & clickYInt & ":source=" & sourceLabel
+end clickNotesPlusByBounds
+
+on clickNotesPlusByWindowBounds(chromeAppName, processName, notesWindowIndex, plusClicks, clickDelaySeconds, rightOffset, topOffset)
+  if notesWindowIndex is missing value then return "error:missing-notes-window-index"
+
+  try
+    using terms from application "Google Chrome"
+      tell application chromeAppName
+        set notesWindowBounds to bounds of window notesWindowIndex
+      end tell
+    end using terms from
+  on error errMsg number errNum
+    return "error " & errNum & ": " & errMsg
+  end try
+
+  return my clickNotesPlusByBounds(processName, notesWindowBounds, plusClicks, clickDelaySeconds, rightOffset, topOffset, "window")
+end clickNotesPlusByWindowBounds
+
 set chromeApp to system attribute "CHROME_APP"
 set primaryBoundsCSV to system attribute "PRIMARY_BOUNDS"
 set notesBoundsCSV to system attribute "NOTES_BOUNDS"
@@ -877,6 +1098,8 @@ set launchDelayRaw to system attribute "LAUNCH_DELAY_SECONDS"
 set presenterReadyDelayRaw to system attribute "PRESENTER_READY_DELAY_SECONDS"
 set notesShortcutRetryIntervalRaw to system attribute "NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS"
 set notesPlusClickStepsRaw to system attribute "NOTES_PLUS_CLICK_STEPS"
+set notesPlusMethodRaw to system attribute "NOTES_PLUS_METHOD"
+set notesPlusReadyDelayRaw to system attribute "NOTES_PLUS_READY_DELAY_SECONDS"
 set notesPlusClickDelayRaw to system attribute "NOTES_PLUS_CLICK_DELAY_SECONDS"
 set notesPlusButtonRightOffsetRaw to system attribute "NOTES_PLUS_BUTTON_RIGHT_OFFSET"
 set notesPlusButtonTopOffsetRaw to system attribute "NOTES_PLUS_BUTTON_TOP_OFFSET"
@@ -889,13 +1112,23 @@ set launchDelay to launchDelayRaw as number
 set presenterReadyDelay to presenterReadyDelayRaw as number
 set notesShortcutRetryInterval to notesShortcutRetryIntervalRaw as number
 set notesPlusClickSteps to notesPlusClickStepsRaw as integer
+set notesPlusReadyDelay to notesPlusReadyDelayRaw as number
 set notesPlusClickDelay to notesPlusClickDelayRaw as number
 set notesPlusButtonRightOffset to notesPlusButtonRightOffsetRaw as integer
 set notesPlusButtonTopOffset to notesPlusButtonTopOffsetRaw as integer
 set waitTimeout to timeoutRaw as number
 
+set notesPlusMethod to notesPlusMethodRaw as text
+if notesPlusMethod is not "auto" and notesPlusMethod is not "js" and notesPlusMethod is not "coords" then
+  set notesPlusMethod to "auto"
+end if
+
 set primaryBounds to csvToBounds(primaryBoundsCSV)
 set notesBounds to csvToBounds(notesBoundsCSV)
+
+set notesMethodUsed to "skipped"
+set notesFallbackReason to ""
+set notesClickDetail to ""
 
 my waitForProcess(chromeApp, waitTimeout)
 my waitForWindowCount(chromeApp, 1, waitTimeout)
@@ -905,8 +1138,6 @@ tell application "System Events"
   tell process chromeApp
     set frontmost to true
     set slidesWindow to window 1
-    my setWindowBounds(chromeApp, slidesWindow, primaryBounds)
-    my raiseWindow(chromeApp, slidesWindow)
     my clickWindowCenter(chromeApp, slidesWindow)
 
     if launchFromEditMode is "1" then
@@ -916,8 +1147,7 @@ tell application "System Events"
     end if
 
     if notesViaShortcut is "1" then
-      -- Try opening notes immediately, retrying quickly until it appears or timeout.
-      my triggerNotesShortcutWithRetries(chromeApp, chromeApp, slidesWindow, presenterReadyDelay, notesShortcutRetryInterval)
+      my triggerNotesShortcutWithRetries(chromeApp, chromeApp, presenterReadyDelay, notesShortcutRetryInterval)
       delay launchDelay
     end if
   end tell
@@ -966,6 +1196,7 @@ using terms from application "Google Chrome"
 end using terms from
 
 my waitForProcess(chromeApp, waitTimeout)
+
 if slidesChromeIndex is not missing value then
   using terms from application "Google Chrome"
     tell application chromeApp
@@ -978,50 +1209,75 @@ if notesChromeIndex is not missing value then
   using terms from application "Google Chrome"
     tell application chromeApp
       set bounds of window notesChromeIndex to notesBounds
+      try
+        set mode of window notesChromeIndex to "normal"
+      end try
     end tell
   end using terms from
 end if
 
 if fullscreenPrimary is "1" and slidesChromeIndex is not missing value then
-  my setSlidesWindowFullscreen(chromeApp)
+  my setChromeWindowMode(chromeApp, chromeApp, slidesChromeIndex, "fullscreen")
   delay launchDelay
 end if
 
-if fullscreenNotes is "1" and notesChromeIndex is not missing value then
-  set notesFullscreenIndex to missing value
+if notesChromeIndex is not missing value then
+  delay notesPlusReadyDelay
 
-  using terms from application "Google Chrome"
-    tell application chromeApp
-      set chromeWindowCount to count of windows
+  if notesPlusClickSteps > 0 then
+    set notesMethodUsed to "failed"
 
-      repeat with i from 1 to chromeWindowCount
-        set oneTitle to ""
-        set oneURL to ""
-
-        try
-          set oneTitle to title of active tab of window i
-        end try
-
-        try
-          set oneURL to URL of active tab of window i
-        end try
-
-        if oneTitle contains "Presenter view" and oneURL starts with "about:blank" then
-          set notesFullscreenIndex to i
-          exit repeat
-        end if
-      end repeat
-    end tell
-  end using terms from
-
-  if notesFullscreenIndex is not missing value then
-    my setNotesWindowFullscreen(chromeApp)
-
-    if notesPlusClickSteps > 0 then
-      my clickNotesPlusButton(chromeApp, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
+    if notesPlusMethod is "auto" or notesPlusMethod is "js" then
+      set jsResult to my clickNotesPlusViaJavascript(chromeApp, notesChromeIndex, notesPlusClickSteps)
+      if my startsWith(jsResult, "clicked:") then
+        set notesMethodUsed to "js"
+        set notesClickDetail to jsResult
+      else
+        set notesFallbackReason to jsResult
+      end if
     end if
 
+    if notesMethodUsed is "failed" and (notesPlusMethod is "auto" or notesPlusMethod is "coords") then
+      set coordResult to my clickNotesPlusByWindowBounds(chromeApp, chromeApp, notesChromeIndex, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
+      if my startsWith(coordResult, "clicked:") then
+        set notesMethodUsed to "coords"
+        set notesClickDetail to coordResult
+      else
+        if notesFallbackReason is "" then
+          set notesFallbackReason to coordResult
+        else
+          set notesFallbackReason to notesFallbackReason & " | " & coordResult
+        end if
+
+        set coordBoundsResult to my clickNotesPlusByBounds(chromeApp, notesBounds, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset, "config")
+        if my startsWith(coordBoundsResult, "clicked:") then
+          set notesMethodUsed to "coords"
+          set notesClickDetail to coordBoundsResult
+        else
+          if notesFallbackReason is "" then
+            set notesFallbackReason to coordBoundsResult
+          else
+            set notesFallbackReason to notesFallbackReason & " | " & coordBoundsResult
+          end if
+        end if
+      end if
+    end if
+  else
+    set notesMethodUsed to "skipped"
+  end if
+
+  if fullscreenNotes is "1" then
+    my setChromeWindowMode(chromeApp, chromeApp, notesChromeIndex, "fullscreen")
     delay launchDelay
   end if
 end if
+
+return "NOTES_METHOD_CONFIG=" & notesPlusMethod & linefeed & "NOTES_METHOD_USED=" & notesMethodUsed & linefeed & "NOTES_CLICK_DETAIL=" & notesClickDetail & linefeed & "NOTES_FALLBACK_REASON=" & notesFallbackReason
 APPLESCRIPT
+)"
+
+while IFS= read -r summary_line; do
+  if [[ -n "$summary_line" ]]; then
+    echo "[slides_machine_runner] $summary_line"
+  fi
+done <<< "$apple_summary"
