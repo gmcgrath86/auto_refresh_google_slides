@@ -12,6 +12,28 @@ Quick deployment:
 - Bootstrap any machine with `./scripts/bootstrap_machine.sh --role <presentation|relay-agent|controller>`.
 - Fresh machine with hotkey in one command:
   - `./scripts/bootstrap_machine.sh --role presentation --install-hotkey`
+- Remote operator one-shot setup (recommended on managed laptops):
+  - `./scripts/one_shot_remote_setup.sh`
+
+Example relay command for a brand-new machine:
+
+```bash
+REPO_DIR="$HOME/auto_refresh_google_slides"
+RELAY_URL="https://script.google.com/macros/s/<YOUR_DEPLOYMENT_ID>/exec"
+RELAY_SECRET="<YOUR_SHARED_SECRET>"
+SLIDES_SOURCE_URL="https://docs.google.com/presentation/d/<DECK_ID>/edit"
+
+if [ ! -d "$REPO_DIR/.git" ]; then
+  git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git "$REPO_DIR"
+fi
+
+"$REPO_DIR/scripts/one_shot_remote_setup.sh" \
+  --repo-dir "$REPO_DIR" \
+  --mode relay \
+  --slides-url "$SLIDES_SOURCE_URL" \
+  --relay-url "$RELAY_URL" \
+  --relay-secret "$RELAY_SECRET"
+```
 
 ## Fresh Machine Quickstart (Single Laptop + Hotkey)
 Run these exact commands on a new presentation machine:
@@ -74,6 +96,7 @@ One Stream Deck button can:
 - `scripts/slides_machine_runner.sh`: Opens/positions/fullscreens Slides windows on one machine.
 - `scripts/slides_hotkey_trigger.sh`: Hotkey-safe wrapper with lock/logging that can call local/relay/ssh triggers.
 - `scripts/bootstrap_machine.sh`: Creates machine-local config files and normalizes script permissions.
+- `scripts/one_shot_remote_setup.sh`: One-shot bootstrap + config wiring + optional relay health checks for remote operators.
 - `scripts/get_chrome_front_window_bounds.sh`: Prints front Chrome window bounds for calibration.
 - `scripts/calibrate_notes_plus.sh`: Captures exact notes `+` offsets from live mouse position.
 - `scripts/slides_streamdeck_trigger.sh`: SSH orchestrator (local + remote SSH).

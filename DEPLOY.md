@@ -37,6 +37,28 @@ grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTE
 echo "Done. Open a Google Slides tab in Chrome and press ctrl+alt+cmd+r."
 ```
 
+### 1b) One-shot remote setup (recommended for managed laptops)
+This replaces the manual bootstrap/config-edit flow:
+
+```bash
+set -euo pipefail
+REPO_DIR="$HOME/auto_refresh_google_slides"
+RELAY_URL="https://script.google.com/macros/s/<YOUR_DEPLOYMENT_ID>/exec"
+RELAY_SECRET="<YOUR_SHARED_SECRET>"
+SLIDES_SOURCE_URL="https://docs.google.com/presentation/d/<DECK_ID>/edit"
+
+if [ ! -d "$REPO_DIR/.git" ]; then
+  git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git "$REPO_DIR"
+fi
+
+"$REPO_DIR/scripts/one_shot_remote_setup.sh" \
+  --repo-dir "$REPO_DIR" \
+  --mode relay \
+  --slides-url "$SLIDES_SOURCE_URL" \
+  --relay-url "$RELAY_URL" \
+  --relay-secret "$RELAY_SECRET"
+```
+
 ## 2) Bootstrap machine files
 ```bash
 ./scripts/bootstrap_machine.sh --role presentation
