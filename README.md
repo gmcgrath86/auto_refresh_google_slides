@@ -2,7 +2,8 @@
 
 This project supports two control modes:
 - SSH mode: one machine directly triggers the second over SSH.
-- Outbound-only relay mode: both machines poll a cloud webhook relay, so no inbound sharing is required.
+- Outbound-only relay mode: both machines subscribe to a cloud webhook relay, so no inbound sharing is required.
+  - Trigger path: local controller posts command -> relay stores event -> each laptop listens for new event -> runner executes.
 
 For managed laptops where Sharing/SSH is blocked, use relay mode.
 
@@ -173,6 +174,9 @@ cp config/relay_agent.env.example config/relay_agent.env
 - `RELAY_SECRET`
 - `RUNNER_CONFIG` (usually that machine's `config/local.env`)
 - Give each machine a unique `STATE_FILE`.
+- Optional low-latency tuning:
+  - `LISTEN_TIMEOUT_SECONDS` (long-poll wait window, default 20)
+  - `POLL_SECONDS` (fallback sleep, default 2)
 
 3. Test agent in foreground:
 ```bash
@@ -184,6 +188,18 @@ From controller machine:
 ```bash
 ./scripts/slides_relay_streamdeck_trigger.sh ./config/relay_streamdeck.env
 ```
+
+For a one-shot remote check from this machine:
+- On remote laptop, temporarily set `LISTEN_ONCE=1` in `config/relay_agent.env`.
+- Run the agent in foreground:
+```bash
+./scripts/slides_relay_agent.sh ./config/relay_agent.env
+```
+- Trigger once from this machine:
+```bash
+./scripts/slides_relay_streamdeck_trigger.sh ./config/relay_streamdeck.env
+```
+- The listener should log the event and run the local runner, then exit.
 
 ### 5) Bind Stream Deck key
 Use `System -> Open` or `System -> Command` with:

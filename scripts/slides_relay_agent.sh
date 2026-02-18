@@ -7,18 +7,20 @@ Usage:
   slides_relay_agent.sh [relay_agent_config_file]
 
 Config variables:
-  RELAY_URL               Webhook relay URL
-  RELAY_SECRET            Shared secret
-  RUNNER_PATH             Path to slides_machine_runner.sh
-  RUNNER_CONFIG           Path to local slides config
-  POLL_SECONDS=2          Poll interval
-  CURL_TIMEOUT_SECONDS=8  HTTP timeout
-  STATE_DIR               Directory for last seen event state
-  STATE_FILE              State file path (optional override)
-  ACTION_FILTER           Only run matching action (default: refresh_slides)
-  FIRE_ON_STARTUP=0       0 = ignore current event when first started
-  ACK_ON_FAILURE=1        1 = mark event as seen if runner fails
-  VERBOSE=1               1 = print logs
+  RELAY_URL                Webhook relay URL
+  RELAY_SECRET             Shared secret
+  RUNNER_PATH              Path to slides_machine_runner.sh
+  RUNNER_CONFIG            Path to local slides config
+  POLL_SECONDS=2           Poll interval when no long-poll updates arrive
+  CURL_TIMEOUT_SECONDS=8   HTTP timeout (should be >= LISTEN_TIMEOUT_SECONDS + 2 for long-poll)
+  LISTEN_TIMEOUT_SECONDS=20  Max seconds to hold relay GET before return
+  LISTEN_ONCE=0            1 = exit after first matching event
+  STATE_DIR                Directory for last seen event state
+  STATE_FILE               State file path (optional override)
+  ACTION_FILTER            Only run matching action (default: refresh_slides)
+  FIRE_ON_STARTUP=0        0 = ignore current event when first started
+  ACK_ON_FAILURE=1         1 = mark event as seen if runner fails
+  VERBOSE=1                1 = print logs
 USAGE
 }
 
@@ -42,6 +44,8 @@ RUNNER_PATH="${RUNNER_PATH:-$PROJECT_ROOT/scripts/slides_machine_runner.sh}"
 RUNNER_CONFIG="${RUNNER_CONFIG:-$PROJECT_ROOT/config/local.env}"
 POLL_SECONDS="${POLL_SECONDS:-2}"
 CURL_TIMEOUT_SECONDS="${CURL_TIMEOUT_SECONDS:-8}"
+LISTEN_TIMEOUT_SECONDS="${LISTEN_TIMEOUT_SECONDS:-20}"
+LISTEN_ONCE="${LISTEN_ONCE:-0}"
 STATE_DIR="${STATE_DIR:-$HOME/.codex-slides-relay}"
 STATE_FILE="${STATE_FILE:-$STATE_DIR/last_event_id}"
 ACTION_FILTER="${ACTION_FILTER:-refresh_slides}"
@@ -76,16 +80,32 @@ extract_json_field() {
   local json="$1"
   local key="$2"
 
-  printf '%s' "$json" | sed -n "s/.*\"$key\":\"\([^\"]*\)\".*/\1/p"
+  printf '%s' "$json" | sed -n "s/.*\"$key\":\"\([^\"]*\)\".*/\\1/p"
 }
 
 fetch_event_json() {
-  curl -fsS \
-    --connect-timeout "$CURL_TIMEOUT_SECONDS" \
-    --max-time "$CURL_TIMEOUT_SECONDS" \
-    --get \
-    --data-urlencode "secret=${RELAY_SECRET}" \
-    "$RELAY_URL"
+  local since_event_id="$1"
+  local timeout_seconds="$2"
+  local request_timeout="$CURL_TIMEOUT_SECONDS"
+  local -a args=(
+    "--connect-timeout" "$CURL_TIMEOUT_SECONDS"
+    "--max-time" "$request_timeout"
+    "--get"
+    "--data-urlencode" "secret=${RELAY_SECRET}"
+  )
+
+  if [[ -n "$since_event_id" ]]; then
+    args+=( "--data-urlencode" "since=${since_event_id}" )
+  fi
+  if [[ -n "$timeout_seconds" && "$timeout_seconds" != "0" ]]; then
+    if (( timeout_seconds + 2 > request_timeout )); then
+      request_timeout=$(( timeout_seconds + 2 ))
+      args[3]="$request_timeout"
+    fi
+    args+=( "--data-urlencode" "waitSeconds=${timeout_seconds}" )
+  fi
+
+  curl -fsS "${args[@]}" "$RELAY_URL"
 }
 
 read_last_event_id() {
@@ -113,7 +133,7 @@ prime_state_file() {
   fi
 
   local bootstrap_json bootstrap_event_id
-  bootstrap_json="$(fetch_event_json || true)"
+  bootstrap_json="$(fetch_event_json "" "0" || true)"
   bootstrap_event_id="$(extract_json_field "$bootstrap_json" "eventId")"
   write_last_event_id "$bootstrap_event_id"
 
@@ -137,10 +157,11 @@ run_local_action() {
 
 prime_state_file
 
-log "Relay agent started. Poll interval: ${POLL_SECONDS}s"
+log "Relay agent started. Poll interval: ${POLL_SECONDS}s, long-poll timeout: ${LISTEN_TIMEOUT_SECONDS}s"
 
 while true; do
-  json="$(fetch_event_json || true)"
+  last_event_id="$(read_last_event_id)"
+  json="$(fetch_event_json "$last_event_id" "$LISTEN_TIMEOUT_SECONDS" || true)"
 
   if [[ -z "$json" ]]; then
     log "Relay fetch failed; retrying."
@@ -150,16 +171,20 @@ while true; do
 
   event_id="$(extract_json_field "$json" "eventId")"
   action="$(extract_json_field "$json" "action")"
+  changed="$(extract_json_field "$json" "changed")"
+  if [[ -z "$changed" ]]; then
+    changed="true"
+  fi
 
   if [[ -z "$event_id" ]]; then
     sleep "$POLL_SECONDS"
     continue
   fi
 
-  last_event_id="$(read_last_event_id)"
-
-  if [[ "$event_id" == "$last_event_id" ]]; then
-    sleep "$POLL_SECONDS"
+  if [[ "$event_id" == "$last_event_id" || "$changed" != "true" ]]; then
+    if [[ "$LISTEN_TIMEOUT_SECONDS" == "0" ]]; then
+      sleep "$POLL_SECONDS"
+    fi
     continue
   fi
 
@@ -172,6 +197,10 @@ while true; do
       write_last_event_id "$event_id"
       log "Event $event_id marked as seen due to ACK_ON_FAILURE=1."
     fi
+  fi
+
+  if [[ "$LISTEN_ONCE" == "1" ]]; then
+    break
   fi
 
   sleep "$POLL_SECONDS"

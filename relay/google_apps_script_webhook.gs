@@ -15,8 +15,57 @@ function doGet(e) {
     return jsonOut({ ok: false, error: 'unauthorized' });
   }
 
-  const state = readLatestEvent();
-  return jsonOut({ ok: true, ...state });
+  const params = (e && e.parameter) ? e.parameter : {};
+  const since = (params.since || '').trim();
+  const timeoutSeconds = clampWaitSeconds(params.waitSeconds);
+
+  if (!since || timeoutSeconds === 0) {
+    const state = readLatestEvent();
+    return jsonOut({ ok: true, changed: eventHasChanged(state, since), ...state });
+  }
+
+  const changedState = waitForRelayChange(since, timeoutSeconds);
+  return jsonOut({ ok: true, ...changedState });
+}
+
+function eventHasChanged(state, since) {
+  const current = String(state.eventId || '');
+  return { changed: String(current && current !== since) };
+}
+
+function waitForRelayChange(sinceEventId, timeoutSeconds) {
+  const deadline = new Date().getTime() + (timeoutSeconds * 1000);
+  const pollInterval = 750;
+
+  while (true) {
+    const state = readLatestEvent();
+    const currentEventId = String(state.eventId || '');
+    if (currentEventId && currentEventId !== sinceEventId) {
+      return {
+        changed: 'true',
+        ...state,
+      };
+    }
+
+    const remaining = deadline - new Date().getTime();
+    if (remaining <= 0) {
+      return {
+        changed: 'false',
+        eventId: sinceEventId,
+        action: '',
+        source: 'none',
+        triggeredAt: new Date().toISOString(),
+      };
+    }
+
+    Utilities.sleep(Math.min(remaining, pollInterval));
+  }
+}
+
+function clampWaitSeconds(raw) {
+  const value = Number(raw);
+  if (!value || value < 0) return 0;
+  return Math.min(55, Math.floor(value));
 }
 
 function doPost(e) {

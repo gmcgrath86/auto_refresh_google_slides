@@ -137,6 +137,9 @@ On each laptop, bootstrap relay agent files:
 
 Edit on each laptop:
 - `config/relay_agent.env`
+- Optional near-realtime tuning:
+  - `LISTEN_TIMEOUT_SECONDS` (long-poll window, default 20)
+  - `POLL_SECONDS` (fallback poll sleep, default 2)
 
 On Stream Deck/controller machine:
 ```bash
@@ -147,6 +150,17 @@ Edit:
 - `config/relay_streamdeck.env`
 
 Trigger test:
+```bash
+./scripts/slides_relay_streamdeck_trigger.sh ./config/relay_streamdeck.env
+```
+
+One-shot remote listener test:
+- Set `LISTEN_ONCE=1` in the remote laptop's `config/relay_agent.env`.
+- Run:
+```bash
+./scripts/slides_relay_agent.sh ./config/relay_agent.env
+```
+- From this machine, send one event:
 ```bash
 ./scripts/slides_relay_streamdeck_trigger.sh ./config/relay_streamdeck.env
 ```
