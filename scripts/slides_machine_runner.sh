@@ -33,7 +33,7 @@ Optional config variables:
   PRESENTER_READY_DELAY_SECONDS=5.0
   NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS=0.5
   NOTES_SHORTCUT_MAX_WAIT_SECONDS=20
-  NOTES_PLUS_CLICK_STEPS=0
+  NOTES_PLUS_CLICK_STEPS=7
   NOTES_PLUS_METHOD="auto"
   NOTES_PLUS_READY_DELAY_SECONDS=0.45
   NOTES_PLUS_CLICK_DELAY_SECONDS=0.08
@@ -81,7 +81,7 @@ USE_PRESENTER_NOTES_SHORTCUT="${USE_PRESENTER_NOTES_SHORTCUT:-1}"
 LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-1.0}"
 PRESENTER_READY_DELAY_SECONDS="${PRESENTER_READY_DELAY_SECONDS:-5.0}"
 NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS="${NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS:-0.5}"
-NOTES_PLUS_CLICK_STEPS="${NOTES_PLUS_CLICK_STEPS:-${NOTES_ZOOM_STEPS:-0}}"
+NOTES_PLUS_CLICK_STEPS="${NOTES_PLUS_CLICK_STEPS:-${NOTES_ZOOM_STEPS:-7}}"
 NOTES_PLUS_METHOD="${NOTES_PLUS_METHOD:-auto}"
 NOTES_PLUS_READY_DELAY_SECONDS="${NOTES_PLUS_READY_DELAY_SECONDS:-0.45}"
 NOTES_PLUS_CLICK_DELAY_SECONDS="${NOTES_PLUS_CLICK_DELAY_SECONDS:-${NOTES_ZOOM_STEP_DELAY_SECONDS:-0.08}}"
@@ -1385,50 +1385,6 @@ end if
 set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
 
 if notesChromeIndex is not missing value then
-  delay notesPlusReadyDelay
-
-  if notesPlusClickSteps > 0 then
-    set notesMethodUsed to "failed"
-
-    if notesPlusMethod is "auto" or notesPlusMethod is "js" then
-      set jsResult to my clickNotesPlusViaJavascript(chromeApp, notesChromeIndex, notesPlusClickSteps)
-      if my startsWith(jsResult, "clicked:") then
-        set notesMethodUsed to "js"
-        set notesClickDetail to jsResult
-      else
-        set notesFallbackReason to jsResult
-      end if
-    end if
-
-    if notesMethodUsed is "failed" and (notesPlusMethod is "auto" or notesPlusMethod is "coords") then
-      set coordResult to my clickNotesPlusByWindowBounds(chromeApp, chromeApp, notesChromeIndex, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
-      if my startsWith(coordResult, "clicked:") then
-        set notesMethodUsed to "coords"
-        set notesClickDetail to coordResult
-      else
-        if notesFallbackReason is "" then
-          set notesFallbackReason to coordResult
-        else
-          set notesFallbackReason to notesFallbackReason & " | " & coordResult
-        end if
-
-        set coordBoundsResult to my clickNotesPlusByBounds(chromeApp, notesBounds, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset, "config")
-        if my startsWith(coordBoundsResult, "clicked:") then
-          set notesMethodUsed to "coords"
-          set notesClickDetail to coordBoundsResult
-        else
-          if notesFallbackReason is "" then
-            set notesFallbackReason to coordBoundsResult
-          else
-            set notesFallbackReason to notesFallbackReason & " | " & coordBoundsResult
-          end if
-        end if
-      end if
-    end if
-  else
-    set notesMethodUsed to "skipped"
-  end if
-
   if fullscreenNotes is "1" and notesChromeId is not missing value then
     my setChromeWindowMode(chromeApp, chromeApp, notesChromeId, "fullscreen")
     delay 0.15
@@ -1437,6 +1393,54 @@ if notesChromeIndex is not missing value then
       delay 0.15
     end if
     delay launchDelay
+  end if
+
+  set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
+
+  if notesChromeIndex is not missing value then
+    delay notesPlusReadyDelay
+
+    if notesPlusClickSteps > 0 then
+      set notesMethodUsed to "failed"
+
+      if notesPlusMethod is "auto" or notesPlusMethod is "js" then
+        set jsResult to my clickNotesPlusViaJavascript(chromeApp, notesChromeIndex, notesPlusClickSteps)
+        if my startsWith(jsResult, "clicked:") then
+          set notesMethodUsed to "js"
+          set notesClickDetail to jsResult
+        else
+          set notesFallbackReason to jsResult
+        end if
+      end if
+
+      if notesMethodUsed is "failed" and (notesPlusMethod is "auto" or notesPlusMethod is "coords") then
+        set coordResult to my clickNotesPlusByWindowBounds(chromeApp, chromeApp, notesChromeIndex, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
+        if my startsWith(coordResult, "clicked:") then
+          set notesMethodUsed to "coords"
+          set notesClickDetail to coordResult
+        else
+          if notesFallbackReason is "" then
+            set notesFallbackReason to coordResult
+          else
+            set notesFallbackReason to notesFallbackReason & " | " & coordResult
+          end if
+
+          set coordBoundsResult to my clickNotesPlusByBounds(chromeApp, notesBounds, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset, "config")
+          if my startsWith(coordBoundsResult, "clicked:") then
+            set notesMethodUsed to "coords"
+            set notesClickDetail to coordBoundsResult
+          else
+            if notesFallbackReason is "" then
+              set notesFallbackReason to coordBoundsResult
+            else
+              set notesFallbackReason to notesFallbackReason & " | " & coordBoundsResult
+            end if
+          end if
+        end if
+      end if
+    else
+      set notesMethodUsed to "skipped"
+    end if
   end if
 end if
 
