@@ -217,7 +217,7 @@ fi
 
 set_env_value "$LOCAL_ENV" "AUTO_CAPTURE_FRONT_TAB" "1"
 set_env_value "$LOCAL_ENV" "BOUNDS_MODE" "auto"
-set_env_value "$LOCAL_ENV" "DISPLAY_ASSIGNMENT" "slides:rightmost,notes:leftmost"
+set_env_value "$LOCAL_ENV" "DISPLAY_ASSIGNMENT" "slides:extended,notes:desktop"
 set_env_value "$LOCAL_ENV" "NOTES_PLUS_METHOD" "auto"
 
 if [[ -n "$SLIDES_SOURCE_URL" ]]; then

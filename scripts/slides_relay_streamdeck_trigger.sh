@@ -33,8 +33,11 @@ if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
-LOCAL_RUNNER="${LOCAL_RUNNER:-$PROJECT_ROOT/scripts/slides_machine_runner.sh}"
-LOCAL_CONFIG="${LOCAL_CONFIG:-$PROJECT_ROOT/config/local.env}"
+DEFAULT_LOCAL_RUNNER="$PROJECT_ROOT/scripts/slides_machine_runner.sh"
+DEFAULT_LOCAL_CONFIG="$PROJECT_ROOT/config/local.env"
+
+LOCAL_RUNNER="${LOCAL_RUNNER:-$DEFAULT_LOCAL_RUNNER}"
+LOCAL_CONFIG="${LOCAL_CONFIG:-$DEFAULT_LOCAL_CONFIG}"
 RUN_LOCAL="${RUN_LOCAL:-1}"
 RUN_RELAY="${RUN_RELAY:-1}"
 RELAY_URL="${RELAY_URL:-}"
@@ -43,7 +46,29 @@ ACTION="${ACTION:-refresh_slides}"
 SOURCE_LABEL="${SOURCE_LABEL:-$(hostname)}"
 CURL_TIMEOUT_SECONDS="${CURL_TIMEOUT_SECONDS:-8}"
 
+warn() {
+  echo "Warning: $*" >&2
+}
+
+if [[ ! -x "$LOCAL_RUNNER" && -x "$DEFAULT_LOCAL_RUNNER" ]]; then
+  warn "LOCAL_RUNNER is not executable ($LOCAL_RUNNER). Falling back to $DEFAULT_LOCAL_RUNNER."
+  LOCAL_RUNNER="$DEFAULT_LOCAL_RUNNER"
+fi
+
+if [[ ! -f "$LOCAL_CONFIG" && -f "$DEFAULT_LOCAL_CONFIG" ]]; then
+  warn "LOCAL_CONFIG is missing ($LOCAL_CONFIG). Falling back to $DEFAULT_LOCAL_CONFIG."
+  LOCAL_CONFIG="$DEFAULT_LOCAL_CONFIG"
+fi
+
 if [[ "$RUN_LOCAL" == "1" ]]; then
+  if [[ ! -x "$LOCAL_RUNNER" ]]; then
+    echo "RUN_LOCAL=1 but runner is not executable: $LOCAL_RUNNER" >&2
+    exit 1
+  fi
+  if [[ ! -f "$LOCAL_CONFIG" ]]; then
+    echo "RUN_LOCAL=1 but local config is missing: $LOCAL_CONFIG" >&2
+    exit 1
+  fi
   echo "Running local slides automation..."
   "$LOCAL_RUNNER" "$LOCAL_CONFIG"
 fi
@@ -86,5 +111,10 @@ response="$({
     -d "$payload" \
     "$RELAY_URL"
 } 2>&1)"
+
+if ! printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+  echo "Relay request failed: $response" >&2
+  exit 1
+fi
 
 echo "Relay response: $response"

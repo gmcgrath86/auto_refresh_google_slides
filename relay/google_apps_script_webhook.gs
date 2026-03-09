@@ -30,7 +30,7 @@ function doGet(e) {
 
 function eventHasChanged(state, since) {
   const current = String(state.eventId || '');
-  return { changed: String(current && current !== since) };
+  return Boolean(current && current !== since);
 }
 
 function waitForRelayChange(sinceEventId, timeoutSeconds) {
@@ -42,7 +42,7 @@ function waitForRelayChange(sinceEventId, timeoutSeconds) {
     const currentEventId = String(state.eventId || '');
     if (currentEventId && currentEventId !== sinceEventId) {
       return {
-        changed: 'true',
+        changed: true,
         ...state,
       };
     }
@@ -50,7 +50,7 @@ function waitForRelayChange(sinceEventId, timeoutSeconds) {
     const remaining = deadline - new Date().getTime();
     if (remaining <= 0) {
       return {
-        changed: 'false',
+        changed: false,
         eventId: sinceEventId,
         action: '',
         source: 'none',

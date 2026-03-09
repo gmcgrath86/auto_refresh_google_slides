@@ -31,7 +31,7 @@ FILE="$REPO_DIR/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
 grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
 grep -q '^BOUNDS_MODE=' "$FILE" && sed -i '' 's|^BOUNDS_MODE=.*|BOUNDS_MODE="auto"|' "$FILE" || echo 'BOUNDS_MODE="auto"' >> "$FILE"
-grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"' >> "$FILE"
+grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"' >> "$FILE"
 grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTES_PLUS_METHOD="auto"|' "$FILE" || echo 'NOTES_PLUS_METHOD="auto"' >> "$FILE"
 
 echo "Done. Open a Google Slides tab in Chrome and press ctrl+alt+cmd+r."
@@ -78,7 +78,7 @@ Edit:
 Set at minimum:
 - `AUTO_CAPTURE_FRONT_TAB=1`
 - `BOUNDS_MODE="auto"`
-- `DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"`
+- `DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"`
 
 Optional (already tuned fast/stable defaults):
 - `LAUNCH_DELAY_SECONDS`
@@ -99,7 +99,7 @@ FILE="$HOME/auto_refresh_google_slides/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
 grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
 grep -q '^BOUNDS_MODE=' "$FILE" && sed -i '' 's|^BOUNDS_MODE=.*|BOUNDS_MODE="auto"|' "$FILE" || echo 'BOUNDS_MODE="auto"' >> "$FILE"
-grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"' >> "$FILE"
+grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"' >> "$FILE"
 grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTES_PLUS_METHOD="auto"|' "$FILE" || echo 'NOTES_PLUS_METHOD="auto"' >> "$FILE"
 ```
 
@@ -135,6 +135,7 @@ Recommended:
 
 Manual alternative:
 - Install Hammerspoon (`brew install --cask hammerspoon`)
+- If Homebrew is unavailable, install Hammerspoon manually from [https://github.com/Hammerspoon/hammerspoon/releases/latest](https://github.com/Hammerspoon/hammerspoon/releases/latest) and drag app to `/Applications`
 - Create `~/.hammerspoon/slides_hotkey.lua`
 - Ensure `~/.hammerspoon/init.lua` includes:
 ```lua
@@ -147,6 +148,14 @@ Default hotkey:
 Verification:
 ```bash
 tail -n 60 /tmp/slides-hotkey.log
+```
+
+Remote HTTP commands (same VLAN):
+```bash
+curl "http://<slides-machine-ip>:8765/slides/health"
+curl "http://<slides-machine-ip>:8765/slides/run"
+curl "http://<slides-machine-ip>:8765/slides/jump/25"
+curl "http://<slides-machine-ip>:8765/slides/jump?slide=25"
 ```
 
 ## 7) Two-machine trigger options

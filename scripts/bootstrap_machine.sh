@@ -110,7 +110,11 @@ setup_hammerspoon_hotkey() {
 
   if [[ ! -d /Applications/Hammerspoon.app ]]; then
     if ! command -v brew >/dev/null 2>&1; then
-      echo "Homebrew not found. Install Homebrew first, then rerun with --install-hotkey." >&2
+      echo "Hammerspoon is not installed and Homebrew was not found." >&2
+      echo "Install one of the following, then rerun with --install-hotkey:" >&2
+      echo "  1) Homebrew path (recommended): brew install --cask hammerspoon" >&2
+      echo "  2) Manual path: download latest .dmg from https://github.com/Hammerspoon/hammerspoon/releases/latest" >&2
+      echo "     and drag Hammerspoon.app into /Applications" >&2
       exit 1
     fi
 
@@ -150,6 +154,8 @@ local triggerMode = "$HOTKEY_MODE"
 local triggerConfig = "$trigger_config_lua"
 local hotkeyMods = {$lua_mods}
 local hotkeyKey = "$HOTKEY_KEY"
+local httpInterface = "en0"
+local httpPort = 8765
 
 local function runSlidesTrigger()
   local args = {"--mode", triggerMode, "--config", triggerConfig}
@@ -175,12 +181,153 @@ end
 
 hs.hotkey.bind(hotkeyMods, hotkeyKey, runSlidesTrigger)
 print("Slides hotkey ready: " .. table.concat(hotkeyMods, "+") .. "+" .. string.upper(hotkeyKey))
+
+if _G.slidesHttpServer then
+  _G.slidesHttpServer:stop()
+  _G.slidesHttpServer = nil
+end
+
+local function jsonResponse(body, status)
+  return body, status, { ["Content-Type"] = "application/json" }
+end
+
+local function jsonEscape(value)
+  local text = tostring(value or "")
+  text = text:gsub("\\\\", "\\\\\\\\")
+  text = text:gsub('"', '\\\\"')
+  return text
+end
+
+local function parseSlideNumberFromPath(path)
+  local qmark = path:find("?", 1, true)
+  local route = path
+  local query = ""
+
+  if qmark then
+    route = path:sub(1, qmark - 1)
+    query = path:sub(qmark + 1)
+  end
+
+  local byRoute = route:match("^/slides/jump/(%d+)$")
+  if byRoute then
+    return tonumber(byRoute)
+  end
+
+  if route == "/slides/jump" and #query > 0 then
+    for pair in query:gmatch("[^&]+") do
+      local key, value = pair:match("^([^=]+)=?(.*)$")
+      if key == "slide" or key == "n" then
+        local byQuery = value:match("^(%d+)$")
+        if byQuery then
+          return tonumber(byQuery)
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+local function jumpToSlide(slideNumber)
+  if type(slideNumber) ~= "number" or slideNumber < 1 then
+    return false, "invalid-slide-number"
+  end
+
+  local chrome = hs.application.get("Google Chrome")
+  if not chrome then
+    return false, "chrome-not-running"
+  end
+
+  local targetWindow = nil
+  local fallbackWindow = nil
+
+  for _, oneWindow in ipairs(chrome:allWindows()) do
+    local title = oneWindow:title() or ""
+    if oneWindow:isStandard() and title:find("Google Slides", 1, true) and not title:find("Presenter view", 1, true) then
+      if oneWindow:isFullScreen() then
+        targetWindow = oneWindow
+        break
+      end
+      if not targetWindow then
+        targetWindow = oneWindow
+      end
+    end
+
+    if oneWindow:isStandard() and not fallbackWindow then
+      fallbackWindow = oneWindow
+    end
+  end
+
+  if not targetWindow then
+    targetWindow = fallbackWindow
+  end
+
+  if not targetWindow then
+    return false, "slides-window-not-found"
+  end
+
+  chrome:activate(true)
+  targetWindow:focus()
+  hs.timer.usleep(180000)
+  hs.eventtap.keyStrokes(tostring(math.floor(slideNumber)))
+  hs.timer.usleep(70000)
+  hs.eventtap.keyStroke({}, "return")
+  return true, "jumped"
+end
+
+local function onHttpRequest(method, path, _, _)
+  if method == "GET" and path == "/slides/health" then
+    return jsonResponse('{"ok":true,"service":"slides-trigger"}', 200)
+  end
+
+  local slideNumber = nil
+  if method == "GET" or method == "POST" then
+    slideNumber = parseSlideNumberFromPath(path)
+  end
+
+  if slideNumber then
+    local ok, detail = jumpToSlide(slideNumber)
+    if ok then
+      local body = string.format('{"ok":true,"slide":%d,"detail":"%s"}', slideNumber, jsonEscape(detail))
+      return jsonResponse(body, 200)
+    end
+
+    local body = string.format('{"ok":false,"slide":%d,"error":"%s"}', slideNumber, jsonEscape(detail))
+    return jsonResponse(body, 500)
+  end
+
+  if (method == "GET" or method == "POST") and path == "/slides/run" then
+    runSlidesTrigger()
+    return jsonResponse('{"ok":true,"triggered":true}', 200)
+  end
+
+  return jsonResponse('{"ok":false,"error":"not_found"}', 404)
+end
+
+local server = hs.httpserver.new()
+server:setInterface(httpInterface)
+server:setPort(httpPort)
+server:setCallback(onHttpRequest)
+server:start()
+_G.slidesHttpServer = server
+
+print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
+print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
 EOF
 
   init_file="$HOME_HAMMERSPOON_DIR/init.lua"
+  local ipc_line
   hook_line='dofile(os.getenv("HOME") .. "/.hammerspoon/slides_hotkey.lua")'
+  ipc_line='require("hs.ipc")'
 
   if [[ -f "$init_file" ]]; then
+    if ! grep -Fq "$ipc_line" "$init_file"; then
+      {
+        echo ""
+        echo "-- Allow `hs -c` reloads from shell"
+        echo "$ipc_line"
+      } >> "$init_file"
+    fi
     if ! grep -Fq "$hook_line" "$init_file"; then
       {
         echo ""
@@ -191,6 +338,7 @@ EOF
   else
     cat > "$init_file" <<EOF
 -- Hammerspoon init created by bootstrap_machine.sh
+$ipc_line
 $hook_line
 EOF
   fi
@@ -207,6 +355,9 @@ EOF
   echo "Mode/config: $HOTKEY_MODE -> $hotkey_config_path"
   echo "If hotkey still does nothing, enable Accessibility for Hammerspoon:"
   echo "System Settings -> Privacy & Security -> Accessibility -> Hammerspoon"
+  echo "Remote trigger endpoint: http://<this-machine-ip>:8765/slides/run"
+  echo "Remote health endpoint:  http://<this-machine-ip>:8765/slides/health"
+  echo "Remote jump endpoint:    http://<this-machine-ip>:8765/slides/jump/<number>"
 }
 
 create_if_missing() {

@@ -15,7 +15,7 @@ Optional config variables:
   CHROME_APP="Google Chrome"
   CHROME_PROFILE="Default"
   BOUNDS_MODE="auto"
-  DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"
+  DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"
   PRIMARY_BOUNDS="0,25,1920,1080"
   NOTES_BOUNDS="1920,25,3840,1080"
   FULLSCREEN_PRIMARY=1
@@ -64,7 +64,7 @@ fi
 CHROME_APP="${CHROME_APP:-Google Chrome}"
 CHROME_PROFILE="${CHROME_PROFILE:-Default}"
 BOUNDS_MODE="${BOUNDS_MODE:-auto}"
-DISPLAY_ASSIGNMENT="${DISPLAY_ASSIGNMENT:-slides:rightmost,notes:leftmost}"
+DISPLAY_ASSIGNMENT="${DISPLAY_ASSIGNMENT:-slides:extended,notes:desktop}"
 PRIMARY_BOUNDS="${PRIMARY_BOUNDS:-0,25,1920,1080}"
 NOTES_BOUNDS="${NOTES_BOUNDS:-1920,25,3840,1080}"
 FULLSCREEN_PRIMARY="${FULLSCREEN_PRIMARY:-1}"
@@ -388,8 +388,8 @@ func visibleBoundsForScreen(_ screen: NSScreen) -> Bounds {
 }
 
 func parseAssignment(_ assignment: String) -> (slides: String, notes: String) {
-  var slides = "rightmost"
-  var notes = "leftmost"
+  var slides = "extended"
+  var notes = "desktop"
 
   for chunk in assignment.split(separator: ",") {
     let pair = chunk.split(separator: ":", maxSplits: 1)
@@ -403,16 +403,35 @@ func parseAssignment(_ assignment: String) -> (slides: String, notes: String) {
   return (slides, notes)
 }
 
+func boundsEqual(_ a: Bounds, _ b: Bounds) -> Bool {
+  return a.left == b.left &&
+    a.top == b.top &&
+    a.right == b.right &&
+    a.bottom == b.bottom
+}
+
 func pickScreen(named token: String, screens: [Bounds], main: Bounds) -> Bounds {
   if screens.isEmpty { return main }
   let lowered = token.lowercased()
   switch lowered {
+  case "desktop", "mirrored", "mirror", "primary", "main", "notes":
+    return main
+  case "extended", "secondary", "nonmain", "external", "slides":
+    let nonMainScreens = screens.filter { !boundsEqual($0, main) }
+    if nonMainScreens.isEmpty { return main }
+    if nonMainScreens.count == 1 { return nonMainScreens[0] }
+    return nonMainScreens.max(by: { lhs, rhs in
+      let lhsArea = lhs.width * lhs.height
+      let rhsArea = rhs.width * rhs.height
+      if lhsArea == rhsArea {
+        return centerDistanceSquared(lhs, main) < centerDistanceSquared(rhs, main)
+      }
+      return lhsArea < rhsArea
+    }) ?? nonMainScreens[0]
   case "leftmost":
     return screens.min(by: { $0.left < $1.left }) ?? main
   case "rightmost":
     return screens.max(by: { $0.left < $1.left }) ?? main
-  case "primary", "main":
-    return main
   default:
     return main
   }
@@ -421,7 +440,7 @@ func pickScreen(named token: String, screens: [Bounds], main: Bounds) -> Bounds 
 let env = ProcessInfo.processInfo.environment
 let modeRaw = (env["BOUNDS_MODE_RUNTIME"] ?? "auto").lowercased()
 let mode = (modeRaw == "manual") ? "manual" : "auto"
-let assignment = env["DISPLAY_ASSIGNMENT_RUNTIME"] ?? "slides:rightmost,notes:leftmost"
+let assignment = env["DISPLAY_ASSIGNMENT_RUNTIME"] ?? "slides:extended,notes:desktop"
 let manualPrimary = env["PRIMARY_BOUNDS_RUNTIME"] ?? ""
 let manualNotes = env["NOTES_BOUNDS_RUNTIME"] ?? ""
 
@@ -974,7 +993,29 @@ on waitForProcess(processName, timeoutSeconds)
   end repeat
 end waitForProcess
 
-on setChromeWindowMode(chromeAppName, processName, windowIndex, modeName)
+on resolveWindowIndexById(chromeAppName, targetWindowId)
+  if targetWindowId is missing value then return missing value
+
+  using terms from application "Google Chrome"
+    tell application chromeAppName
+      set chromeWindowCount to count of windows
+      repeat with i from 1 to chromeWindowCount
+        try
+          if (id of window i) is targetWindowId then
+            return i
+          end if
+        end try
+      end repeat
+    end tell
+  end using terms from
+
+  return missing value
+end resolveWindowIndexById
+
+on setChromeWindowMode(chromeAppName, processName, targetWindowId, modeName)
+  if targetWindowId is missing value then return false
+
+  set windowIndex to my resolveWindowIndexById(chromeAppName, targetWindowId)
   if windowIndex is missing value then return false
 
   try
@@ -989,10 +1030,27 @@ on setChromeWindowMode(chromeAppName, processName, windowIndex, modeName)
     return true
   on error
     if modeName is "fullscreen" then
+      set windowIndex to my resolveWindowIndexById(chromeAppName, targetWindowId)
+      if windowIndex is not missing value then
+        try
+          using terms from application "Google Chrome"
+            tell application chromeAppName
+              activate
+              set index of window windowIndex to 1
+            end tell
+          end using terms from
+          delay 0.08
+        end try
+      end if
+
       tell application "System Events"
         tell process processName
           set frontmost to true
-          keystroke "f" using {command down, control down}
+          try
+            set value of attribute "AXFullScreen" of window 1 to true
+          on error
+            keystroke "f" using {command down, control down}
+          end try
         end tell
       end tell
       return true
@@ -1001,6 +1059,51 @@ on setChromeWindowMode(chromeAppName, processName, windowIndex, modeName)
 
   return false
 end setChromeWindowMode
+
+on isAXFullscreenByTitleContains(processName, titleToken)
+  tell application "System Events"
+    tell process processName
+      repeat with oneWindow in windows
+        set windowTitle to ""
+        try
+          set windowTitle to value of attribute "AXTitle" of oneWindow
+        end try
+
+        if windowTitle contains titleToken then
+          try
+            if value of attribute "AXFullScreen" of oneWindow is true then
+              return true
+            end if
+          end try
+        end if
+      end repeat
+    end tell
+  end tell
+
+  return false
+end isAXFullscreenByTitleContains
+
+on setAXFullscreenByTitleContains(processName, titleToken, targetState)
+  tell application "System Events"
+    tell process processName
+      repeat with oneWindow in windows
+        set windowTitle to ""
+        try
+          set windowTitle to value of attribute "AXTitle" of oneWindow
+        end try
+
+        if windowTitle contains titleToken then
+          try
+            set value of attribute "AXFullScreen" of oneWindow to targetState
+            return true
+          end try
+        end if
+      end repeat
+    end tell
+  end tell
+
+  return false
+end setAXFullscreenByTitleContains
 
 on clickNotesPlusViaJavascript(chromeAppName, notesWindowIndex, plusClicks)
   if plusClicks is less than or equal to 0 then return "skipped:steps"
@@ -1201,6 +1304,8 @@ end if
 
 set slidesChromeIndex to missing value
 set notesChromeIndex to missing value
+set slidesChromeId to missing value
+set notesChromeId to missing value
 
 using terms from application "Google Chrome"
   tell application chromeApp
@@ -1209,6 +1314,7 @@ using terms from application "Google Chrome"
     repeat with i from 1 to chromeWindowCount
       set oneTitle to ""
       set oneURL to ""
+      set oneWindowId to missing value
 
       try
         set oneTitle to title of active tab of window i
@@ -1218,26 +1324,39 @@ using terms from application "Google Chrome"
         set oneURL to URL of active tab of window i
       end try
 
+      try
+        set oneWindowId to id of window i
+      end try
+
       if notesChromeIndex is missing value and my isNotesChromeWindow(oneTitle, oneURL) then
         set notesChromeIndex to i
+        set notesChromeId to oneWindowId
       end if
 
       if slidesChromeIndex is missing value and oneURL contains "/presentation/d/" and oneURL contains "/present" then
         set slidesChromeIndex to i
+        set slidesChromeId to oneWindowId
       end if
     end repeat
 
     if slidesChromeIndex is missing value and chromeWindowCount is greater than 0 then
       set slidesChromeIndex to 1
+      try
+        set slidesChromeId to id of window 1
+      end try
     end if
 
-    if notesChromeIndex is not missing value and notesChromeIndex is slidesChromeIndex then
+    if notesChromeId is not missing value and slidesChromeId is not missing value and notesChromeId is slidesChromeId then
       set notesChromeIndex to missing value
+      set notesChromeId to missing value
     end if
   end tell
 end using terms from
 
 my waitForProcess(chromeApp, waitTimeout)
+
+set slidesChromeIndex to my resolveWindowIndexById(chromeApp, slidesChromeId)
+set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
 
 if slidesChromeIndex is not missing value then
   using terms from application "Google Chrome"
@@ -1258,10 +1377,12 @@ if notesChromeIndex is not missing value then
   end using terms from
 end if
 
-if fullscreenPrimary is "1" and slidesChromeIndex is not missing value then
-  my setChromeWindowMode(chromeApp, chromeApp, slidesChromeIndex, "fullscreen")
+if fullscreenPrimary is "1" and slidesChromeId is not missing value then
+  my setChromeWindowMode(chromeApp, chromeApp, slidesChromeId, "fullscreen")
   delay launchDelay
 end if
+
+set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
 
 if notesChromeIndex is not missing value then
   delay notesPlusReadyDelay
@@ -1308,11 +1429,18 @@ if notesChromeIndex is not missing value then
     set notesMethodUsed to "skipped"
   end if
 
-  if fullscreenNotes is "1" then
-    my setChromeWindowMode(chromeApp, chromeApp, notesChromeIndex, "fullscreen")
+  if fullscreenNotes is "1" and notesChromeId is not missing value then
+    my setChromeWindowMode(chromeApp, chromeApp, notesChromeId, "fullscreen")
+    delay 0.15
+    if my isAXFullscreenByTitleContains(chromeApp, "Presenter view") is false then
+      my setAXFullscreenByTitleContains(chromeApp, "Presenter view", true)
+      delay 0.15
+    end if
     delay launchDelay
   end if
 end if
+
+set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
 
 if expectNotesWindow is "1" and notesChromeIndex is missing value then
   if notesFallbackReason is "" then

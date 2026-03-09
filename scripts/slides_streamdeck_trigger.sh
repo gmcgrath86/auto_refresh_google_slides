@@ -32,8 +32,11 @@ if [[ -f "$CONTROLLER_CONFIG" ]]; then
   source "$CONTROLLER_CONFIG"
 fi
 
-LOCAL_RUNNER="${LOCAL_RUNNER:-$PROJECT_ROOT/scripts/slides_machine_runner.sh}"
-LOCAL_CONFIG="${LOCAL_CONFIG:-$PROJECT_ROOT/config/local.env}"
+DEFAULT_LOCAL_RUNNER="$PROJECT_ROOT/scripts/slides_machine_runner.sh"
+DEFAULT_LOCAL_CONFIG="$PROJECT_ROOT/config/local.env"
+
+LOCAL_RUNNER="${LOCAL_RUNNER:-$DEFAULT_LOCAL_RUNNER}"
+LOCAL_CONFIG="${LOCAL_CONFIG:-$DEFAULT_LOCAL_CONFIG}"
 RUN_LOCAL="${RUN_LOCAL:-1}"
 RUN_REMOTE="${RUN_REMOTE:-1}"
 SSH_TIMEOUT_SECONDS="${SSH_TIMEOUT_SECONDS:-6}"
@@ -42,7 +45,29 @@ REMOTE_SSH_TARGET="${REMOTE_SSH_TARGET:-}"
 REMOTE_RUNNER="${REMOTE_RUNNER:-$LOCAL_RUNNER}"
 REMOTE_CONFIG="${REMOTE_CONFIG:-$PROJECT_ROOT/config/remote.env}"
 
+warn() {
+  echo "Warning: $*" >&2
+}
+
+if [[ ! -x "$LOCAL_RUNNER" && -x "$DEFAULT_LOCAL_RUNNER" ]]; then
+  warn "LOCAL_RUNNER is not executable ($LOCAL_RUNNER). Falling back to $DEFAULT_LOCAL_RUNNER."
+  LOCAL_RUNNER="$DEFAULT_LOCAL_RUNNER"
+fi
+
+if [[ ! -f "$LOCAL_CONFIG" && -f "$DEFAULT_LOCAL_CONFIG" ]]; then
+  warn "LOCAL_CONFIG is missing ($LOCAL_CONFIG). Falling back to $DEFAULT_LOCAL_CONFIG."
+  LOCAL_CONFIG="$DEFAULT_LOCAL_CONFIG"
+fi
+
 if [[ "$RUN_LOCAL" == "1" ]]; then
+  if [[ ! -x "$LOCAL_RUNNER" ]]; then
+    echo "RUN_LOCAL=1 but runner is not executable: $LOCAL_RUNNER" >&2
+    exit 1
+  fi
+  if [[ ! -f "$LOCAL_CONFIG" ]]; then
+    echo "RUN_LOCAL=1 but local config is missing: $LOCAL_CONFIG" >&2
+    exit 1
+  fi
   echo "Running local slides automation..."
   "$LOCAL_RUNNER" "$LOCAL_CONFIG"
 fi

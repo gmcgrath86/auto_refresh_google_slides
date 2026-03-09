@@ -1,20 +1,25 @@
--- Slides global hotkey (Hammerspoon)
--- 1) Install Hammerspoon: brew install --cask hammerspoon
--- 2) Copy this file to ~/.hammerspoon/init.lua (or paste into your existing init.lua)
--- 3) Update projectRoot and hotkey below.
+-- Slides hotkey + HTTP endpoints (Hammerspoon)
+-- Homebrew install (recommended): brew install --cask hammerspoon
+-- Manual install (no Homebrew): download latest .dmg from
+-- https://github.com/Hammerspoon/hammerspoon/releases/latest and drag to /Applications
+-- Save as ~/.hammerspoon/init.lua (or merge into your existing init.lua).
+
+require("hs.ipc")
 
 local projectRoot = "/ABSOLUTE/PATH/auto_refresh_google_slides"
 local triggerScript = projectRoot .. "/scripts/slides_hotkey_trigger.sh"
 
--- Choose mode: "local" (this machine only), "relay" (outbound-only cloud trigger), "ssh" (direct SSH trigger)
+-- Choose mode: "local" (this machine), "relay", or "ssh"
 local triggerMode = "local"
-
--- Config file for selected mode
 local triggerConfig = projectRoot .. "/config/local.env"
 
 -- Global hotkey (works while Chrome is fullscreen)
 local hotkeyMods = {"ctrl", "alt", "cmd"}
 local hotkeyKey = "r"
+
+-- HTTP control endpoint (for remote curl triggers on same VLAN)
+local httpInterface = "en0"
+local httpPort = 8765
 
 local function runSlidesTrigger()
   local args = {"--mode", triggerMode, "--config", triggerConfig}
@@ -26,24 +31,149 @@ local function runSlidesTrigger()
       hs.notify.new({ title = "Slides", informativeText = "Refresh failed (" .. tostring(exitCode) .. ")" }):send()
     end
 
-    if stdOut and #stdOut > 0 then
-      print(stdOut)
-    end
-
-    if stdErr and #stdErr > 0 then
-      print(stdErr)
-    end
-
+    if stdOut and #stdOut > 0 then print(stdOut) end
+    if stdErr and #stdErr > 0 then print(stdErr) end
     return true
   end, args)
 
-  if not task then
+  if task then
+    task:start()
+  else
     hs.notify.new({ title = "Slides", informativeText = "Failed to create hotkey task" }):send()
-    return
   end
-
-  task:start()
 end
 
 hs.hotkey.bind(hotkeyMods, hotkeyKey, runSlidesTrigger)
 print("Slides hotkey ready: " .. table.concat(hotkeyMods, "+") .. "+" .. string.upper(hotkeyKey))
+
+if _G.slidesHttpServer then
+  _G.slidesHttpServer:stop()
+  _G.slidesHttpServer = nil
+end
+
+local function jsonResponse(body, status)
+  return body, status, { ["Content-Type"] = "application/json" }
+end
+
+local function jsonEscape(value)
+  local text = tostring(value or "")
+  text = text:gsub("\\", "\\\\")
+  text = text:gsub('"', '\\"')
+  return text
+end
+
+local function parseSlideNumberFromPath(path)
+  local qmark = path:find("?", 1, true)
+  local route = path
+  local query = ""
+
+  if qmark then
+    route = path:sub(1, qmark - 1)
+    query = path:sub(qmark + 1)
+  end
+
+  local byRoute = route:match("^/slides/jump/(%d+)$")
+  if byRoute then
+    return tonumber(byRoute)
+  end
+
+  if route == "/slides/jump" and #query > 0 then
+    for pair in query:gmatch("[^&]+") do
+      local key, value = pair:match("^([^=]+)=?(.*)$")
+      if key == "slide" or key == "n" then
+        local byQuery = value:match("^(%d+)$")
+        if byQuery then
+          return tonumber(byQuery)
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+local function jumpToSlide(slideNumber)
+  if type(slideNumber) ~= "number" or slideNumber < 1 then
+    return false, "invalid-slide-number"
+  end
+
+  local chrome = hs.application.get("Google Chrome")
+  if not chrome then
+    return false, "chrome-not-running"
+  end
+
+  local targetWindow = nil
+  local fallbackWindow = nil
+
+  for _, oneWindow in ipairs(chrome:allWindows()) do
+    local title = oneWindow:title() or ""
+    if oneWindow:isStandard() and title:find("Google Slides", 1, true) and not title:find("Presenter view", 1, true) then
+      if oneWindow:isFullScreen() then
+        targetWindow = oneWindow
+        break
+      end
+      if not targetWindow then
+        targetWindow = oneWindow
+      end
+    end
+
+    if oneWindow:isStandard() and not fallbackWindow then
+      fallbackWindow = oneWindow
+    end
+  end
+
+  if not targetWindow then
+    targetWindow = fallbackWindow
+  end
+
+  if not targetWindow then
+    return false, "slides-window-not-found"
+  end
+
+  chrome:activate(true)
+  targetWindow:focus()
+  hs.timer.usleep(180000)
+  hs.eventtap.keyStrokes(tostring(math.floor(slideNumber)))
+  hs.timer.usleep(70000)
+  hs.eventtap.keyStroke({}, "return")
+  return true, "jumped"
+end
+
+local function onHttpRequest(method, path, _, _)
+  if method == "GET" and path == "/slides/health" then
+    return jsonResponse('{"ok":true,"service":"slides-trigger"}', 200)
+  end
+
+  local slideNumber = nil
+  if method == "GET" or method == "POST" then
+    slideNumber = parseSlideNumberFromPath(path)
+  end
+
+  if slideNumber then
+    local ok, detail = jumpToSlide(slideNumber)
+    if ok then
+      local body = string.format('{"ok":true,"slide":%d,"detail":"%s"}', slideNumber, jsonEscape(detail))
+      return jsonResponse(body, 200)
+    end
+
+    local body = string.format('{"ok":false,"slide":%d,"error":"%s"}', slideNumber, jsonEscape(detail))
+    return jsonResponse(body, 500)
+  end
+
+  if (method == "GET" or method == "POST") and path == "/slides/run" then
+    runSlidesTrigger()
+    return jsonResponse('{"ok":true,"triggered":true}', 200)
+  end
+
+  return jsonResponse('{"ok":false,"error":"not_found"}', 404)
+end
+
+local server = hs.httpserver.new()
+server:setInterface(httpInterface)
+server:setPort(httpPort)
+server:setCallback(onHttpRequest)
+server:start()
+_G.slidesHttpServer = server
+
+print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
+print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")

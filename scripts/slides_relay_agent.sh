@@ -40,8 +40,11 @@ fi
 
 RELAY_URL="${RELAY_URL:-}"
 RELAY_SECRET="${RELAY_SECRET:-}"
-RUNNER_PATH="${RUNNER_PATH:-$PROJECT_ROOT/scripts/slides_machine_runner.sh}"
-RUNNER_CONFIG="${RUNNER_CONFIG:-$PROJECT_ROOT/config/local.env}"
+DEFAULT_RUNNER_PATH="$PROJECT_ROOT/scripts/slides_machine_runner.sh"
+DEFAULT_RUNNER_CONFIG="$PROJECT_ROOT/config/local.env"
+
+RUNNER_PATH="${RUNNER_PATH:-$DEFAULT_RUNNER_PATH}"
+RUNNER_CONFIG="${RUNNER_CONFIG:-$DEFAULT_RUNNER_CONFIG}"
 POLL_SECONDS="${POLL_SECONDS:-2}"
 CURL_TIMEOUT_SECONDS="${CURL_TIMEOUT_SECONDS:-8}"
 LISTEN_TIMEOUT_SECONDS="${LISTEN_TIMEOUT_SECONDS:-20}"
@@ -52,6 +55,20 @@ ACTION_FILTER="${ACTION_FILTER:-refresh_slides}"
 FIRE_ON_STARTUP="${FIRE_ON_STARTUP:-0}"
 ACK_ON_FAILURE="${ACK_ON_FAILURE:-1}"
 VERBOSE="${VERBOSE:-1}"
+
+warn() {
+  echo "Warning: $*" >&2
+}
+
+if [[ ! -x "$RUNNER_PATH" && -x "$DEFAULT_RUNNER_PATH" ]]; then
+  warn "RUNNER_PATH is not executable ($RUNNER_PATH). Falling back to $DEFAULT_RUNNER_PATH."
+  RUNNER_PATH="$DEFAULT_RUNNER_PATH"
+fi
+
+if [[ ! -f "$RUNNER_CONFIG" && -f "$DEFAULT_RUNNER_CONFIG" ]]; then
+  warn "RUNNER_CONFIG is missing ($RUNNER_CONFIG). Falling back to $DEFAULT_RUNNER_CONFIG."
+  RUNNER_CONFIG="$DEFAULT_RUNNER_CONFIG"
+fi
 
 if [[ -z "$RELAY_URL" ]]; then
   echo "RELAY_URL is required." >&2
@@ -68,6 +85,11 @@ if [[ ! -x "$RUNNER_PATH" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$RUNNER_CONFIG" ]]; then
+  echo "Runner config not found: $RUNNER_CONFIG" >&2
+  exit 1
+fi
+
 mkdir -p "$STATE_DIR"
 
 log() {
@@ -76,11 +98,18 @@ log() {
   fi
 }
 
-extract_json_field() {
+extract_json_string_field() {
   local json="$1"
   local key="$2"
 
-  printf '%s' "$json" | sed -n "s/.*\"$key\":\"\([^\"]*\)\".*/\\1/p"
+  printf '%s' "$json" | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\\1/p"
+}
+
+extract_json_bool_field() {
+  local json="$1"
+  local key="$2"
+
+  printf '%s' "$json" | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\\1/p"
 }
 
 fetch_event_json() {
@@ -134,7 +163,7 @@ prime_state_file() {
 
   local bootstrap_json bootstrap_event_id
   bootstrap_json="$(fetch_event_json "" "0" || true)"
-  bootstrap_event_id="$(extract_json_field "$bootstrap_json" "eventId")"
+  bootstrap_event_id="$(extract_json_string_field "$bootstrap_json" "eventId")"
   write_last_event_id "$bootstrap_event_id"
 
   if [[ -n "$bootstrap_event_id" ]]; then
@@ -169,9 +198,24 @@ while true; do
     continue
   fi
 
-  event_id="$(extract_json_field "$json" "eventId")"
-  action="$(extract_json_field "$json" "action")"
-  changed="$(extract_json_field "$json" "changed")"
+  ok_flag="$(extract_json_bool_field "$json" "ok")"
+  if [[ "$ok_flag" == "false" ]]; then
+    relay_error="$(extract_json_string_field "$json" "error")"
+    if [[ -n "$relay_error" ]]; then
+      log "Relay returned error: $relay_error"
+    else
+      log "Relay returned non-ok response."
+    fi
+    sleep "$POLL_SECONDS"
+    continue
+  fi
+
+  event_id="$(extract_json_string_field "$json" "eventId")"
+  action="$(extract_json_string_field "$json" "action")"
+  changed="$(extract_json_string_field "$json" "changed")"
+  if [[ -z "$changed" ]]; then
+    changed="$(extract_json_bool_field "$json" "changed")"
+  fi
   if [[ -z "$changed" ]]; then
     changed="true"
   fi

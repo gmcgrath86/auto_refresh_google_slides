@@ -62,7 +62,7 @@ FILE="$REPO_DIR/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
 grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
 grep -q '^BOUNDS_MODE=' "$FILE" && sed -i '' 's|^BOUNDS_MODE=.*|BOUNDS_MODE="auto"|' "$FILE" || echo 'BOUNDS_MODE="auto"' >> "$FILE"
-grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"' >> "$FILE"
+grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"' >> "$FILE"
 grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTES_PLUS_METHOD="auto"|' "$FILE" || echo 'NOTES_PLUS_METHOD="auto"' >> "$FILE"
 
 tail -n 20 /tmp/slides-hotkey.log 2>/dev/null || true
@@ -76,7 +76,7 @@ FILE="$HOME/auto_refresh_google_slides/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
 grep -q '^AUTO_CAPTURE_FRONT_TAB=' "$FILE" && sed -i '' 's|^AUTO_CAPTURE_FRONT_TAB=.*|AUTO_CAPTURE_FRONT_TAB=1|' "$FILE" || echo 'AUTO_CAPTURE_FRONT_TAB=1' >> "$FILE"
 grep -q '^BOUNDS_MODE=' "$FILE" && sed -i '' 's|^BOUNDS_MODE=.*|BOUNDS_MODE="auto"|' "$FILE" || echo 'BOUNDS_MODE="auto"' >> "$FILE"
-grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:rightmost,notes:leftmost"' >> "$FILE"
+grep -q '^DISPLAY_ASSIGNMENT=' "$FILE" && sed -i '' 's|^DISPLAY_ASSIGNMENT=.*|DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"|' "$FILE" || echo 'DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"' >> "$FILE"
 grep -q '^NOTES_PLUS_METHOD=' "$FILE" && sed -i '' 's|^NOTES_PLUS_METHOD=.*|NOTES_PLUS_METHOD="auto"|' "$FILE" || echo 'NOTES_PLUS_METHOD="auto"' >> "$FILE"
 ```
 
@@ -89,7 +89,7 @@ Final checks:
 ## What this solves
 One Stream Deck button can:
 1. Relaunch Slides presentation + notes windows locally.
-2. Put notes on the secondary monitor and fullscreen it.
+2. Put notes on the desktop/mirrored monitor and slides on the extended monitor, both in true fullscreen.
 3. Signal the second laptop to do the same (without inbound network access).
 
 ## Files
@@ -130,7 +130,7 @@ cp config/local.env.example config/local.env
 - optionally `SLIDES_PRESENT_URL` if you want to bypass auto-derivation
 - optionally `SLIDES_NOTES_URL` if you don't want shortcut-generated notes
 - `BOUNDS_MODE` (`auto` recommended, `manual` available)
-- `DISPLAY_ASSIGNMENT` (`slides:rightmost,notes:leftmost`)
+- `DISPLAY_ASSIGNMENT` (`slides:extended,notes:desktop`)
 - optional manual-only: `PRIMARY_BOUNDS`, `NOTES_BOUNDS`
 - optional timing tune:
   - `LAUNCH_DELAY_SECONDS` (post-action settle delay)
@@ -288,6 +288,9 @@ If you want a keyboard hotkey that works even when Chrome is fullscreen:
 ```bash
 brew install --cask hammerspoon
 ```
+If Homebrew is unavailable, install Hammerspoon manually from:
+- [https://github.com/Hammerspoon/hammerspoon/releases/latest](https://github.com/Hammerspoon/hammerspoon/releases/latest)
+- Drag `Hammerspoon.app` into `/Applications`.
 
 4. Copy the example config:
 ```bash
@@ -310,6 +313,24 @@ cp config/hammerspoon.init.lua.example ~/.hammerspoon/init.lua
 Notes:
 - Stream Deck can send the same hotkey if you prefer pressing a Stream Deck key.
 - Logs are written to `/tmp/slides-hotkey.log`.
+
+## Remote HTTP trigger (same VLAN)
+When hotkey setup is installed via `bootstrap_machine.sh --install-hotkey`, Hammerspoon also starts an HTTP API on `en0:8765`.
+
+Commands from another machine on the same network:
+```bash
+# health
+curl "http://<slides-machine-ip>:8765/slides/health"
+
+# refresh now
+curl "http://<slides-machine-ip>:8765/slides/run"
+
+# jump to an exact slide number
+curl "http://<slides-machine-ip>:8765/slides/jump/25"
+
+# equivalent query-string form
+curl "http://<slides-machine-ip>:8765/slides/jump?slide=25"
+```
 
 ## Deck behavior
 With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any Google Slides deck:
