@@ -1083,6 +1083,27 @@ on isAXFullscreenByTitleContains(processName, titleToken)
   return false
 end isAXFullscreenByTitleContains
 
+on isFrontWindowTitleContains(processName, titleToken)
+  tell application "System Events"
+    tell process processName
+      if (count of windows) is 0 then return false
+
+      set frontTitle to ""
+      try
+        set frontTitle to value of attribute "AXTitle" of window 1
+      on error
+        try
+          set frontTitle to name of window 1
+        end try
+      end try
+
+      if frontTitle contains titleToken then return true
+    end tell
+  end tell
+
+  return false
+end isFrontWindowTitleContains
+
 on setAXFullscreenByTitleContains(processName, titleToken, targetState)
   tell application "System Events"
     tell process processName
@@ -1246,6 +1267,7 @@ set notesFallbackReason to ""
 set notesClickDetail to ""
 set notesWindowFound to false
 set notesWindowWaitResult to "not-requested"
+set notesFrontAfterFullscreen to "unknown"
 
 if notesShortcutMaxWait < presenterReadyDelay then
   set notesShortcutMaxWait to presenterReadyDelay
@@ -1395,6 +1417,17 @@ if notesChromeIndex is not missing value then
     delay launchDelay
   end if
 
+  if my isFrontWindowTitleContains(chromeApp, "Presenter view") then
+    set notesFrontAfterFullscreen to "yes"
+  else
+    set notesFrontAfterFullscreen to "no"
+    if notesFallbackReason is "" then
+      set notesFallbackReason to "notes-not-front-after-fullscreen"
+    else
+      set notesFallbackReason to notesFallbackReason & " | notes-not-front-after-fullscreen"
+    end if
+  end if
+
   set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
 
   if notesChromeIndex is not missing value then
@@ -1414,7 +1447,12 @@ if notesChromeIndex is not missing value then
       end if
 
       if notesMethodUsed is "failed" and (notesPlusMethod is "auto" or notesPlusMethod is "coords") then
-        set coordResult to my clickNotesPlusByWindowBounds(chromeApp, chromeApp, notesChromeIndex, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
+        if notesFrontAfterFullscreen is "yes" then
+          set coordResult to my clickNotesPlusByWindowBounds(chromeApp, chromeApp, notesChromeIndex, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
+        else
+          set coordResult to "error:notes-not-front"
+        end if
+
         if my startsWith(coordResult, "clicked:") then
           set notesMethodUsed to "coords"
           set notesClickDetail to coordResult
@@ -1425,7 +1463,12 @@ if notesChromeIndex is not missing value then
             set notesFallbackReason to notesFallbackReason & " | " & coordResult
           end if
 
-          set coordBoundsResult to my clickNotesPlusByBounds(chromeApp, notesBounds, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset, "config")
+          if notesFrontAfterFullscreen is "yes" then
+            set coordBoundsResult to my clickNotesPlusByBounds(chromeApp, notesBounds, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset, "config")
+          else
+            set coordBoundsResult to "error:notes-not-front"
+          end if
+
           if my startsWith(coordBoundsResult, "clicked:") then
             set notesMethodUsed to "coords"
             set notesClickDetail to coordBoundsResult
@@ -1436,6 +1479,45 @@ if notesChromeIndex is not missing value then
               set notesFallbackReason to notesFallbackReason & " | " & coordBoundsResult
             end if
           end if
+        end if
+      end if
+
+      if notesMethodUsed is "failed" and (notesPlusMethod is "auto" or notesPlusMethod is "coords") and notesChromeId is not missing value then
+        my setChromeWindowMode(chromeApp, chromeApp, notesChromeId, "normal")
+        delay 0.25
+        set notesChromeIndex to my resolveWindowIndexById(chromeApp, notesChromeId)
+        if notesChromeIndex is not missing value then
+          using terms from application "Google Chrome"
+            tell application chromeApp
+              set bounds of window notesChromeIndex to notesBounds
+              try
+                set mode of window notesChromeIndex to "normal"
+              end try
+            end tell
+          end using terms from
+
+          delay 0.2
+          set normalCoordResult to my clickNotesPlusByWindowBounds(chromeApp, chromeApp, notesChromeIndex, notesPlusClickSteps, notesPlusClickDelay, notesPlusButtonRightOffset, notesPlusButtonTopOffset)
+          if my startsWith(normalCoordResult, "clicked:") then
+            set notesMethodUsed to "coords"
+            set notesClickDetail to normalCoordResult & ":fallback=normal"
+          else
+            if notesFallbackReason is "" then
+              set notesFallbackReason to normalCoordResult
+            else
+              set notesFallbackReason to notesFallbackReason & " | " & normalCoordResult
+            end if
+          end if
+        end if
+
+        if fullscreenNotes is "1" and notesChromeId is not missing value then
+          my setChromeWindowMode(chromeApp, chromeApp, notesChromeId, "fullscreen")
+          delay 0.15
+          if my isAXFullscreenByTitleContains(chromeApp, "Presenter view") is false then
+            my setAXFullscreenByTitleContains(chromeApp, "Presenter view", true)
+            delay 0.15
+          end if
+          delay launchDelay
         end if
       end if
     else
@@ -1454,7 +1536,7 @@ if expectNotesWindow is "1" and notesChromeIndex is missing value then
   end if
 end if
 
-return "NOTES_METHOD_CONFIG=" & notesPlusMethod & linefeed & "NOTES_METHOD_USED=" & notesMethodUsed & linefeed & "NOTES_CLICK_DETAIL=" & notesClickDetail & linefeed & "NOTES_WINDOW_EXPECTED=" & expectNotesWindow & linefeed & "NOTES_WINDOW_FOUND=" & notesWindowFound & linefeed & "NOTES_WINDOW_WAIT_RESULT=" & notesWindowWaitResult & linefeed & "NOTES_SHORTCUT_WAIT_SECONDS=" & notesShortcutMaxWait & linefeed & "NOTES_FALLBACK_REASON=" & notesFallbackReason
+return "NOTES_METHOD_CONFIG=" & notesPlusMethod & linefeed & "NOTES_METHOD_USED=" & notesMethodUsed & linefeed & "NOTES_CLICK_DETAIL=" & notesClickDetail & linefeed & "NOTES_WINDOW_EXPECTED=" & expectNotesWindow & linefeed & "NOTES_WINDOW_FOUND=" & notesWindowFound & linefeed & "NOTES_WINDOW_WAIT_RESULT=" & notesWindowWaitResult & linefeed & "NOTES_FRONT_AFTER_FULLSCREEN=" & notesFrontAfterFullscreen & linefeed & "NOTES_SHORTCUT_WAIT_SECONDS=" & notesShortcutMaxWait & linefeed & "NOTES_FALLBACK_REASON=" & notesFallbackReason
 APPLESCRIPT
 )"
 
