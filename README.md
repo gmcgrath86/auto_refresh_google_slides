@@ -138,7 +138,9 @@ cp config/local.env.example config/local.env
   - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS` (retry interval for notes shortcut)
   - `NOTES_SHORTCUT_MAX_WAIT_SECONDS` (hard cap for notes shortcut retries; increase for very large decks)
   - `NOTES_PLUS_CLICK_STEPS` (number of clicks on the notes `+` control after fullscreen)
-  - `NOTES_PLUS_METHOD` (`auto`, `js`, or `coords`)
+  - `NOTES_PLUS_METHOD` (`auto`, `ax`, `js`, or `coords`; `auto` prefers `ax`)
+  - `CHROME_FORCE_RENDERER_ACCESSIBILITY` (`1` recommended; enables reliable notes zoom button AXPress)
+  - `CHROME_RESTART_FOR_RENDERER_ACCESSIBILITY` (`1` recommended; restarts Chrome if needed so the flag is active)
   - `NOTES_PLUS_READY_DELAY_SECONDS` (delay after notes fullscreen before clicking `+`)
   - `NOTES_PLUS_CLICK_DELAY_SECONDS` (delay between notes `+` clicks)
   - `NOTES_PLUS_BUTTON_RIGHT_OFFSET` (pixels from notes window right edge to `+` click point)
@@ -159,7 +161,7 @@ chmod +x scripts/*.sh
 ./scripts/slides_machine_runner.sh ./config/local.env
 ```
 
-6. For best JS notes-click reliability, enable in Chrome:
+6. Optional JS fallback only (not required when `NOTES_PLUS_METHOD=auto` with AXPress):
 - `View -> Developer -> Allow JavaScript from Apple Events`
 
 ## Relay mode (recommended for blocked sharing)

@@ -86,7 +86,9 @@ Optional (already tuned fast/stable defaults):
 - `NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS`
 - `NOTES_SHORTCUT_MAX_WAIT_SECONDS` (increase for very large decks or slower load)
 - `NOTES_PLUS_CLICK_STEPS` (default `7`, clicks notes `+` control)
-- `NOTES_PLUS_METHOD` (`auto`, `js`, or `coords`)
+- `NOTES_PLUS_METHOD` (`auto`, `ax`, `js`, or `coords`; `auto` prefers `ax`)
+- `CHROME_FORCE_RENDERER_ACCESSIBILITY` (`1` recommended)
+- `CHROME_RESTART_FOR_RENDERER_ACCESSIBILITY` (`1` recommended)
 - `NOTES_PLUS_READY_DELAY_SECONDS` (delay after notes fullscreen before clicking)
 - `NOTES_PLUS_CLICK_DELAY_SECONDS`
 - `NOTES_PLUS_BUTTON_RIGHT_OFFSET`

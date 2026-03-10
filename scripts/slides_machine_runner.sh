@@ -14,6 +14,8 @@ Input URL options:
 Optional config variables:
   CHROME_APP="Google Chrome"
   CHROME_PROFILE="Default"
+  CHROME_FORCE_RENDERER_ACCESSIBILITY=1
+  CHROME_RESTART_FOR_RENDERER_ACCESSIBILITY=1
   BOUNDS_MODE="auto"
   DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"
   PRIMARY_BOUNDS="0,25,1920,1080"
@@ -34,7 +36,7 @@ Optional config variables:
   NOTES_SHORTCUT_RETRY_INTERVAL_SECONDS=0.5
   NOTES_SHORTCUT_MAX_WAIT_SECONDS=20
   NOTES_PLUS_CLICK_STEPS=7
-  NOTES_PLUS_METHOD="auto"
+  NOTES_PLUS_METHOD="auto"   # auto/js/coords/ax
   NOTES_PLUS_READY_DELAY_SECONDS=0.45
   NOTES_PLUS_CLICK_DELAY_SECONDS=0.08
   NOTES_PLUS_BUTTON_RIGHT_OFFSET=56
@@ -63,6 +65,8 @@ fi
 
 CHROME_APP="${CHROME_APP:-Google Chrome}"
 CHROME_PROFILE="${CHROME_PROFILE:-Default}"
+CHROME_FORCE_RENDERER_ACCESSIBILITY="${CHROME_FORCE_RENDERER_ACCESSIBILITY:-1}"
+CHROME_RESTART_FOR_RENDERER_ACCESSIBILITY="${CHROME_RESTART_FOR_RENDERER_ACCESSIBILITY:-1}"
 BOUNDS_MODE="${BOUNDS_MODE:-auto}"
 DISPLAY_ASSIGNMENT="${DISPLAY_ASSIGNMENT:-slides:extended,notes:desktop}"
 PRIMARY_BOUNDS="${PRIMARY_BOUNDS:-0,25,1920,1080}"
@@ -92,6 +96,13 @@ OPEN_RETRY_DELAY_SECONDS="${OPEN_RETRY_DELAY_SECONDS:-1.0}"
 WINDOW_WAIT_TIMEOUT_SECONDS="${WINDOW_WAIT_TIMEOUT_SECONDS:-20}"
 NOTES_SHORTCUT_MAX_WAIT_SECONDS="${NOTES_SHORTCUT_MAX_WAIT_SECONDS:-$WINDOW_WAIT_TIMEOUT_SECONDS}"
 
+# Prefer AXPress over coordinate clicking when auto mode is selected.
+if [[ "$NOTES_PLUS_METHOD" == "auto" && "$CHROME_FORCE_RENDERER_ACCESSIBILITY" == "1" ]]; then
+  if [[ "$NOTES_PLUS_CLICK_STEPS" =~ ^[0-9]+$ ]] && (( NOTES_PLUS_CLICK_STEPS > 0 )); then
+    NOTES_PLUS_METHOD="ax"
+  fi
+fi
+
 SLIDES_PRESENT_URL="${SLIDES_PRESENT_URL:-}"
 SLIDES_NOTES_URL="${SLIDES_NOTES_URL:-}"
 SLIDES_SOURCE_URL="${SLIDES_SOURCE_URL:-}"
@@ -105,8 +116,8 @@ if [[ "$BOUNDS_MODE" != "auto" && "$BOUNDS_MODE" != "manual" ]]; then
   exit 1
 fi
 
-if [[ "$NOTES_PLUS_METHOD" != "auto" && "$NOTES_PLUS_METHOD" != "js" && "$NOTES_PLUS_METHOD" != "coords" ]]; then
-  echo "Invalid NOTES_PLUS_METHOD=$NOTES_PLUS_METHOD (expected auto, js, or coords)" >&2
+if [[ "$NOTES_PLUS_METHOD" != "auto" && "$NOTES_PLUS_METHOD" != "js" && "$NOTES_PLUS_METHOD" != "coords" && "$NOTES_PLUS_METHOD" != "ax" ]]; then
+  echo "Invalid NOTES_PLUS_METHOD=$NOTES_PLUS_METHOD (expected auto, js, coords, or ax)" >&2
   exit 1
 fi
 
@@ -622,6 +633,213 @@ wait_for_chrome_process() {
   done
 }
 
+chrome_process_has_force_renderer_accessibility() {
+  local chrome_pid
+  local chrome_cmd
+
+  chrome_pid="$(pgrep -x "$CHROME_APP" | head -n 1 || true)"
+  if [[ -z "$chrome_pid" ]]; then
+    return 1
+  fi
+
+  chrome_cmd="$(ps -p "$chrome_pid" -o command= 2>/dev/null || true)"
+  [[ "$chrome_cmd" == *"--force-renderer-accessibility"* ]]
+}
+
+should_require_renderer_accessibility() {
+  if [[ "$CHROME_FORCE_RENDERER_ACCESSIBILITY" != "1" ]]; then
+    return 1
+  fi
+
+  if [[ ! "$NOTES_PLUS_CLICK_STEPS" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  if (( NOTES_PLUS_CLICK_STEPS <= 0 )); then
+    return 1
+  fi
+
+  [[ "$NOTES_PLUS_METHOD" == "auto" || "$NOTES_PLUS_METHOD" == "ax" ]]
+}
+
+ensure_chrome_force_renderer_accessibility() {
+  if ! should_require_renderer_accessibility; then
+    return 0
+  fi
+
+  if pgrep -x "$CHROME_APP" >/dev/null 2>&1; then
+    if chrome_process_has_force_renderer_accessibility; then
+      return 0
+    fi
+
+    if [[ "$CHROME_RESTART_FOR_RENDERER_ACCESSIBILITY" != "1" ]]; then
+      echo "[slides_machine_runner] WARN: Chrome is running without --force-renderer-accessibility; notes AX zoom may fail."
+      return 0
+    fi
+
+    pkill -x "$CHROME_APP" >/dev/null 2>&1 || true
+    sleep 0.8
+  fi
+
+  open -a "$CHROME_APP" --args --force-renderer-accessibility >/dev/null 2>&1 || true
+  if ! wait_for_chrome_process 8; then
+    echo "[slides_machine_runner] WARN: Unable to launch Chrome with --force-renderer-accessibility."
+    return 0
+  fi
+
+  sleep 0.5
+  return 0
+}
+
+click_notes_plus_via_hammerspoon_axpress() {
+  if [[ ! "$NOTES_PLUS_CLICK_STEPS" =~ ^[0-9]+$ ]] || (( NOTES_PLUS_CLICK_STEPS <= 0 )); then
+    printf 'skipped:steps\n'
+    return 0
+  fi
+
+  local hs_bin=""
+  if command -v hs >/dev/null 2>&1; then
+    hs_bin="$(command -v hs)"
+  elif [[ -x "/opt/homebrew/bin/hs" ]]; then
+    hs_bin="/opt/homebrew/bin/hs"
+  elif [[ -x "/usr/local/bin/hs" ]]; then
+    hs_bin="/usr/local/bin/hs"
+  fi
+
+  if [[ -z "$hs_bin" ]]; then
+    printf 'error:hs-not-found\n'
+    return 1
+  fi
+
+  local hs_result
+  local chrome_app_lua
+  local hs_script
+  chrome_app_lua="$(printf '%s' "$CHROME_APP" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  hs_script="$(cat <<LUA
+local ax = require("hs.axuielement")
+local appName = "${chrome_app_lua}"
+local steps = tonumber("${NOTES_PLUS_CLICK_STEPS}") or 0
+local clickDelaySeconds = tonumber("${NOTES_PLUS_CLICK_DELAY_SECONDS}") or 0.08
+
+if steps <= 0 then
+  print("skipped:steps")
+  return
+end
+
+local app = hs.application.get(appName)
+if not app then
+  print("error:chrome-not-running")
+  return
+end
+
+local targetWindow = nil
+for _, oneWindow in ipairs(app:allWindows()) do
+  local title = oneWindow:title() or ""
+  if title:find("Presenter view", 1, true) then
+    if oneWindow:isFullScreen() then
+      targetWindow = oneWindow
+      break
+    end
+    if not targetWindow then
+      targetWindow = oneWindow
+    end
+  end
+end
+
+if not targetWindow then
+  print("error:presenter-window-not-found")
+  return
+end
+
+app:activate(true)
+targetWindow:focus()
+hs.timer.usleep(180000)
+
+local root = ax.windowElement(targetWindow)
+if not root then
+  print("error:presenter-ax-root-not-found")
+  return
+end
+
+local queue = {root}
+local zoomInButton = nil
+local speakerNotesTab = nil
+local safetyCounter = 0
+
+while #queue > 0 and safetyCounter < 4000 do
+  safetyCounter = safetyCounter + 1
+  local element = table.remove(queue, 1)
+  local role = element:attributeValue("AXRole")
+
+  if role == "AXButton" then
+    local desc = tostring(element:attributeValue("AXDescription") or "")
+    if desc == "Zoom in" then
+      zoomInButton = element
+    end
+  elseif role == "AXRadioButton" then
+    local title = tostring(element:attributeValue("AXTitle") or "")
+    if title == "SPEAKER NOTES" then
+      speakerNotesTab = element
+    end
+  end
+
+  local children = element:attributeValue("AXChildren")
+  if type(children) == "table" then
+    for _, child in ipairs(children) do
+      if type(child) == "userdata" then
+        table.insert(queue, child)
+      end
+    end
+  end
+end
+
+if speakerNotesTab then
+  local selected = tostring(speakerNotesTab:attributeValue("AXValue") or "")
+  if selected ~= "1" and selected ~= "true" then
+    speakerNotesTab:performAction("AXPress")
+    hs.timer.usleep(140000)
+  end
+end
+
+if not zoomInButton then
+  print("error:zoom-in-button-not-found")
+  return
+end
+
+local frame = zoomInButton:attributeValue("AXFrame")
+local centerX = -1
+local centerY = -1
+if type(frame) == "table" then
+  local fx = frame.x or frame.X or frame[1] or 0
+  local fy = frame.y or frame.Y or frame[2] or 0
+  local fw = frame.w or frame.W or frame[3] or 0
+  local fh = frame.h or frame.H or frame[4] or 0
+  centerX = math.floor(fx + (fw / 2) + 0.5)
+  centerY = math.floor(fy + (fh / 2) + 0.5)
+end
+
+for i = 1, steps do
+  zoomInButton:performAction("AXPress")
+  if clickDelaySeconds > 0 then
+    hs.timer.usleep(math.floor(clickDelaySeconds * 1000000))
+  end
+end
+
+print(string.format("clicked:%d:x=%d:y=%d:source=axpress", steps, centerX, centerY))
+LUA
+)"
+
+  hs_result="$("$hs_bin" -c "$hs_script" 2>/dev/null || true)"
+
+  hs_result="$(printf '%s' "$hs_result" | tr -d '\r' | tail -n 1)"
+  if [[ -z "$hs_result" ]]; then
+    hs_result="error:empty-ax-result"
+  fi
+
+  printf '%s\n' "$hs_result"
+  [[ "$hs_result" == clicked:* ]]
+}
+
 open_chrome_window_with_retry() {
   local target_url="$1"
   local attempt
@@ -774,6 +992,8 @@ if [[ "$EXIT_EXISTING_FULLSCREEN" == "1" ]]; then
    end tell
 APPLESCRIPT
 fi
+
+ensure_chrome_force_renderer_accessibility
 
 close_existing_presentation_windows
 ensure_source_tab_open
@@ -1255,7 +1475,7 @@ set notesPlusButtonTopOffset to notesPlusButtonTopOffsetRaw as integer
 set waitTimeout to timeoutRaw as number
 
 set notesPlusMethod to notesPlusMethodRaw as text
-if notesPlusMethod is not "auto" and notesPlusMethod is not "js" and notesPlusMethod is not "coords" then
+if notesPlusMethod is not "auto" and notesPlusMethod is not "js" and notesPlusMethod is not "coords" and notesPlusMethod is not "ax" then
   set notesPlusMethod to "auto"
 end if
 
@@ -1540,8 +1760,69 @@ return "NOTES_METHOD_CONFIG=" & notesPlusMethod & linefeed & "NOTES_METHOD_USED=
 APPLESCRIPT
 )"
 
+notes_method_config="$NOTES_PLUS_METHOD"
+notes_method_used=""
+notes_click_detail=""
+notes_window_expected=""
+notes_window_found=""
+notes_window_wait_result=""
+notes_front_after_fullscreen=""
+notes_shortcut_wait_seconds=""
+notes_fallback_reason=""
+
 while IFS= read -r summary_line; do
-  if [[ -n "$summary_line" ]]; then
-    echo "[slides_machine_runner] $summary_line"
-  fi
+  [[ -z "$summary_line" ]] && continue
+
+  summary_key="${summary_line%%=*}"
+  summary_value="${summary_line#*=}"
+
+  case "$summary_key" in
+    NOTES_METHOD_CONFIG) notes_method_config="$summary_value" ;;
+    NOTES_METHOD_USED) notes_method_used="$summary_value" ;;
+    NOTES_CLICK_DETAIL) notes_click_detail="$summary_value" ;;
+    NOTES_WINDOW_EXPECTED) notes_window_expected="$summary_value" ;;
+    NOTES_WINDOW_FOUND) notes_window_found="$summary_value" ;;
+    NOTES_WINDOW_WAIT_RESULT) notes_window_wait_result="$summary_value" ;;
+    NOTES_FRONT_AFTER_FULLSCREEN) notes_front_after_fullscreen="$summary_value" ;;
+    NOTES_SHORTCUT_WAIT_SECONDS) notes_shortcut_wait_seconds="$summary_value" ;;
+    NOTES_FALLBACK_REASON) notes_fallback_reason="$summary_value" ;;
+  esac
 done <<< "$apple_summary"
+
+should_try_axpress=0
+if [[ "$NOTES_PLUS_CLICK_STEPS" =~ ^[0-9]+$ ]] && (( NOTES_PLUS_CLICK_STEPS > 0 )); then
+  if [[ "$notes_method_config" == "ax" ]]; then
+    should_try_axpress=1
+  elif [[ "$notes_method_config" == "auto" ]]; then
+    if [[ "$notes_method_used" != "js" && "$notes_method_used" != "coords" && "$notes_method_used" != "skipped" ]]; then
+      should_try_axpress=1
+    fi
+  fi
+fi
+
+if (( should_try_axpress == 1 )); then
+  axpress_result="$(click_notes_plus_via_hammerspoon_axpress || true)"
+  if [[ "$axpress_result" == clicked:* ]]; then
+    notes_method_used="ax"
+    notes_click_detail="$axpress_result"
+  else
+    if [[ -n "$notes_fallback_reason" ]]; then
+      notes_fallback_reason="$notes_fallback_reason | $axpress_result"
+    else
+      notes_fallback_reason="$axpress_result"
+    fi
+    if [[ "$notes_method_config" == "ax" ]]; then
+      notes_method_used="failed"
+    fi
+  fi
+fi
+
+echo "[slides_machine_runner] NOTES_METHOD_CONFIG=$notes_method_config"
+echo "[slides_machine_runner] NOTES_METHOD_USED=$notes_method_used"
+echo "[slides_machine_runner] NOTES_CLICK_DETAIL=$notes_click_detail"
+echo "[slides_machine_runner] NOTES_WINDOW_EXPECTED=$notes_window_expected"
+echo "[slides_machine_runner] NOTES_WINDOW_FOUND=$notes_window_found"
+echo "[slides_machine_runner] NOTES_WINDOW_WAIT_RESULT=$notes_window_wait_result"
+echo "[slides_machine_runner] NOTES_FRONT_AFTER_FULLSCREEN=$notes_front_after_fullscreen"
+echo "[slides_machine_runner] NOTES_SHORTCUT_WAIT_SECONDS=$notes_shortcut_wait_seconds"
+echo "[slides_machine_runner] NOTES_FALLBACK_REASON=$notes_fallback_reason"
