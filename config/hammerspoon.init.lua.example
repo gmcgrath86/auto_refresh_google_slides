@@ -62,50 +62,96 @@ local function jsonEscape(value)
   return text
 end
 
-local function parseSlideNumberFromPath(path)
+local function splitRouteAndQuery(path)
   local qmark = path:find("?", 1, true)
-  local route = path
-  local query = ""
-
   if qmark then
-    route = path:sub(1, qmark - 1)
-    query = path:sub(qmark + 1)
+    return path:sub(1, qmark - 1), path:sub(qmark + 1)
   end
+  return path, ""
+end
+
+local function parsePositiveInt(rawValue)
+  local token = tostring(rawValue or ""):match("^(%d+)$")
+  if not token then return nil end
+  local parsed = tonumber(token)
+  if not parsed or parsed < 1 then return nil end
+  return math.floor(parsed)
+end
+
+local function parseNumericQueryValue(query, acceptedKeys)
+  if #query == 0 then return nil end
+  for pair in query:gmatch("[^&]+") do
+    local key, value = pair:match("^([^=]+)=?(.*)$")
+    for _, candidate in ipairs(acceptedKeys) do
+      if key == candidate then
+        return parsePositiveInt(value)
+      end
+    end
+  end
+  return nil
+end
+
+local function parseSlideNumberFromPath(path)
+  local route, query = splitRouteAndQuery(path)
 
   local byRoute = route:match("^/slides/jump/(%d+)$")
   if byRoute then
     return tonumber(byRoute)
   end
 
-  if route == "/slides/jump" and #query > 0 then
-    for pair in query:gmatch("[^&]+") do
-      local key, value = pair:match("^([^=]+)=?(.*)$")
-      if key == "slide" or key == "n" then
-        local byQuery = value:match("^(%d+)$")
-        if byQuery then
-          return tonumber(byQuery)
-        end
-      end
-    end
+  if route == "/slides/jump" then
+    local byQuery = parseNumericQueryValue(query, {"slide", "n"})
+    if byQuery then return byQuery end
   end
 
   return nil
 end
 
-local function jumpToSlide(slideNumber)
-  if type(slideNumber) ~= "number" or slideNumber < 1 then
-    return false, "invalid-slide-number"
+local function parseNotesFontRequest(path)
+  local route, query = splitRouteAndQuery(path)
+
+  local byRouteDirection, byRouteSteps = route:match("^/slides/notes/font/([%a]+)/(%d+)$")
+  if byRouteDirection and byRouteSteps then
+    if byRouteDirection == "up" or byRouteDirection == "down" then
+      return byRouteDirection, tonumber(byRouteSteps), nil
+    end
+    return nil, nil, "missing-or-invalid-direction"
   end
 
-  local chrome = hs.application.get("Google Chrome")
-  if not chrome then
-    return false, "chrome-not-running"
+  local directionOnly = route:match("^/slides/notes/font/([%a]+)$")
+  if directionOnly then
+    if directionOnly ~= "up" and directionOnly ~= "down" then
+      return nil, nil, "missing-or-invalid-direction"
+    end
+    local steps = parseNumericQueryValue(query, {"steps", "n", "clicks"}) or 1
+    return directionOnly, steps, nil
   end
 
+  if route == "/slides/notes/font" then
+    local direction = nil
+    for pair in query:gmatch("[^&]+") do
+      local key, value = pair:match("^([^=]+)=?(.*)$")
+      if key == "dir" or key == "direction" then
+        if value == "up" or value == "down" then
+          direction = value
+        end
+      end
+    end
+    if not direction then
+      return nil, nil, "missing-or-invalid-direction"
+    end
+    local steps = parseNumericQueryValue(query, {"steps", "n", "clicks"}) or 1
+    return direction, steps, nil
+  end
+
+  return nil, nil, nil
+end
+
+local function findSlidesWindow(chromeApp)
   local targetWindow = nil
   local fallbackWindow = nil
 
-  for _, oneWindow in ipairs(chrome:allWindows()) do
+  for _, oneWindow in ipairs(chromeApp:allWindows()) do
     local title = oneWindow:title() or ""
     if oneWindow:isStandard() and title:find("Google Slides", 1, true) and not title:find("Presenter view", 1, true) then
       if oneWindow:isFullScreen() then
@@ -126,6 +172,39 @@ local function jumpToSlide(slideNumber)
     targetWindow = fallbackWindow
   end
 
+  return targetWindow
+end
+
+local function findPresenterWindow(chromeApp)
+  local targetWindow = nil
+
+  for _, oneWindow in ipairs(chromeApp:allWindows()) do
+    local title = oneWindow:title() or ""
+    if oneWindow:isStandard() and title:find("Presenter view", 1, true) then
+      if oneWindow:isFullScreen() then
+        return oneWindow
+      end
+      if not targetWindow then
+        targetWindow = oneWindow
+      end
+    end
+  end
+
+  return targetWindow
+end
+
+local function jumpToSlide(slideNumber)
+  if type(slideNumber) ~= "number" or slideNumber < 1 then
+    return false, "invalid-slide-number"
+  end
+
+  local chrome = hs.application.get("Google Chrome")
+  if not chrome then
+    return false, "chrome-not-running"
+  end
+
+  local targetWindow = findSlidesWindow(chrome)
+
   if not targetWindow then
     return false, "slides-window-not-found"
   end
@@ -137,6 +216,108 @@ local function jumpToSlide(slideNumber)
   hs.timer.usleep(70000)
   hs.eventtap.keyStroke({}, "return")
   return true, "jumped"
+end
+
+local function adjustNotesFont(direction, steps)
+  if direction ~= "up" and direction ~= "down" then
+    return false, "invalid-direction"
+  end
+
+  if type(steps) ~= "number" or steps < 1 then
+    return false, "invalid-step-count"
+  end
+
+  local stepCount = math.floor(steps)
+  if stepCount > 100 then
+    return false, "step-count-too-large"
+  end
+
+  local chrome = hs.application.get("Google Chrome")
+  if not chrome then
+    return false, "chrome-not-running"
+  end
+
+  local presenterWindow = findPresenterWindow(chrome)
+  if not presenterWindow then
+    return false, "presenter-window-not-found"
+  end
+
+  chrome:activate(true)
+  presenterWindow:focus()
+  hs.timer.usleep(180000)
+
+  local ax = require("hs.axuielement")
+  local root = ax.windowElement(presenterWindow)
+  if not root then
+    return false, "presenter-ax-root-not-found"
+  end
+
+  local speakerNotesTab = nil
+  local zoomInButton = nil
+  local zoomOutButton = nil
+  local queue = {root}
+  local safetyCounter = 0
+
+  while #queue > 0 and safetyCounter < 5000 do
+    safetyCounter = safetyCounter + 1
+    local element = table.remove(queue, 1)
+    local role = element:attributeValue("AXRole")
+
+    if role == "AXRadioButton" then
+      local title = tostring(element:attributeValue("AXTitle") or "")
+      if title == "SPEAKER NOTES" then
+        speakerNotesTab = element
+      end
+    elseif role == "AXButton" then
+      local description = tostring(element:attributeValue("AXDescription") or "")
+      if description == "Zoom in" then
+        zoomInButton = element
+      elseif description == "Zoom out" then
+        zoomOutButton = element
+      end
+    end
+
+    local children = element:attributeValue("AXChildren")
+    if type(children) == "table" then
+      for _, child in ipairs(children) do
+        if type(child) == "userdata" then
+          table.insert(queue, child)
+        end
+      end
+    end
+  end
+
+  if speakerNotesTab then
+    local selected = tostring(speakerNotesTab:attributeValue("AXValue") or "")
+    if selected ~= "1" and selected ~= "true" then
+      speakerNotesTab:performAction("AXPress")
+      hs.timer.usleep(120000)
+    end
+  end
+
+  local targetButton = (direction == "up") and zoomInButton or zoomOutButton
+  if not targetButton then
+    return false, direction == "up" and "zoom-in-button-not-found" or "zoom-out-button-not-found"
+  end
+
+  local frame = targetButton:attributeValue("AXFrame")
+  local centerX = -1
+  local centerY = -1
+  if type(frame) == "table" then
+    local fx = frame.x or frame.X or frame[1] or 0
+    local fy = frame.y or frame.Y or frame[2] or 0
+    local fw = frame.w or frame.W or frame[3] or 0
+    local fh = frame.h or frame.H or frame[4] or 0
+    centerX = math.floor(fx + (fw / 2) + 0.5)
+    centerY = math.floor(fy + (fh / 2) + 0.5)
+  end
+
+  for _ = 1, stepCount do
+    targetButton:performAction("AXPress")
+    hs.timer.usleep(70000)
+  end
+
+  return true, string.format("adjusted:%s:%d:x=%d:y=%d:source=axpress", direction, stepCount, centerX, centerY)
 end
 
 local function onHttpRequest(method, path, _, _)
@@ -160,6 +341,26 @@ local function onHttpRequest(method, path, _, _)
     return jsonResponse(body, 500)
   end
 
+  local notesDirection, notesSteps, notesParseError = nil, nil, nil
+  if method == "GET" or method == "POST" then
+    notesDirection, notesSteps, notesParseError = parseNotesFontRequest(path)
+  end
+
+  if notesParseError then
+    local body = string.format('{"ok":false,"error":"%s"}', jsonEscape(notesParseError))
+    return jsonResponse(body, 400)
+  end
+
+  if notesDirection and notesSteps then
+    local ok, detail = adjustNotesFont(notesDirection, notesSteps)
+    if ok then
+      local body = string.format('{"ok":true,"direction":"%s","steps":%d,"detail":"%s"}', notesDirection, notesSteps, jsonEscape(detail))
+      return jsonResponse(body, 200)
+    end
+    local body = string.format('{"ok":false,"direction":"%s","steps":%d,"error":"%s"}', notesDirection, notesSteps, jsonEscape(detail))
+    return jsonResponse(body, 500)
+  end
+
   if (method == "GET" or method == "POST") and path == "/slides/run" then
     runSlidesTrigger()
     return jsonResponse('{"ok":true,"triggered":true}', 200)
@@ -177,3 +378,4 @@ _G.slidesHttpServer = server
 
 print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
 print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
+print("Slides HTTP notes font ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")

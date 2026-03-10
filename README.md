@@ -332,6 +332,15 @@ curl "http://<slides-machine-ip>:8765/slides/jump/25"
 
 # equivalent query-string form
 curl "http://<slides-machine-ip>:8765/slides/jump?slide=25"
+
+# bump notes font up by 7 clicks
+curl "http://<slides-machine-ip>:8765/slides/notes/font/up/7"
+
+# bump notes font down by 3 clicks
+curl "http://<slides-machine-ip>:8765/slides/notes/font/down/3"
+
+# equivalent query-string form
+curl "http://<slides-machine-ip>:8765/slides/notes/font?dir=up&steps=7"
 ```
 
 ## Deck behavior
