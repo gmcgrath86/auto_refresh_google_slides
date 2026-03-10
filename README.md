@@ -9,6 +9,7 @@ For managed laptops where Sharing/SSH is blocked, use relay mode.
 
 Quick deployment:
 - See `DEPLOY.md` for machine-by-machine rollout steps.
+- See `REPLICATION.md` for a Codex-to-Codex handoff runbook on a fresh machine.
 - Bootstrap any machine with `./scripts/bootstrap_machine.sh --role <presentation|relay-agent|controller>`.
 - Fresh machine with hotkey in one command:
   - `./scripts/bootstrap_machine.sh --role presentation --install-hotkey`

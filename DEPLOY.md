@@ -2,6 +2,8 @@
 
 This guide gets this project running on one or two managed macOS presentation laptops quickly and repeatably.
 
+If another Codex instance needs to replicate this setup end-to-end, use `REPLICATION.md`.
+
 ## 1) Clone the repo
 ```bash
 git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git "$HOME/auto_refresh_google_slides"
