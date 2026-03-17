@@ -81,6 +81,7 @@ Set at minimum:
 - `AUTO_CAPTURE_FRONT_TAB=1`
 - `BOUNDS_MODE="auto"`
 - `DISPLAY_ASSIGNMENT="slides:extended,notes:desktop"`
+- `RESTORE_PREVIOUS_SLIDE_ON_REFRESH=1`
 
 Optional (already tuned fast/stable defaults):
 - `LAUNCH_DELAY_SECONDS`

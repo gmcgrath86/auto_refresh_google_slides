@@ -44,6 +44,7 @@ Optional config variables:
   OPEN_RETRY_COUNT=3
   OPEN_RETRY_DELAY_SECONDS=1.0
   WINDOW_WAIT_TIMEOUT_SECONDS=20
+  RESTORE_PREVIOUS_SLIDE_ON_REFRESH=1
 USAGE
 }
 
@@ -95,6 +96,7 @@ OPEN_RETRY_COUNT="${OPEN_RETRY_COUNT:-3}"
 OPEN_RETRY_DELAY_SECONDS="${OPEN_RETRY_DELAY_SECONDS:-1.0}"
 WINDOW_WAIT_TIMEOUT_SECONDS="${WINDOW_WAIT_TIMEOUT_SECONDS:-20}"
 NOTES_SHORTCUT_MAX_WAIT_SECONDS="${NOTES_SHORTCUT_MAX_WAIT_SECONDS:-$WINDOW_WAIT_TIMEOUT_SECONDS}"
+RESTORE_PREVIOUS_SLIDE_ON_REFRESH="${RESTORE_PREVIOUS_SLIDE_ON_REFRESH:-1}"
 
 # Prefer AXPress over coordinate clicking when auto mode is selected.
 if [[ "$NOTES_PLUS_METHOD" == "auto" && "$CHROME_FORCE_RENDERER_ACCESSIBILITY" == "1" ]]; then
@@ -110,6 +112,8 @@ SLIDES_LAUNCH_URL=""
 SOURCE_DECK_ID=""
 DISPLAY_COUNT=""
 BOUNDS_SOURCE=""
+RESTORE_SLIDE_NUMBER=""
+RESTORE_SLIDE_RESULT="skipped"
 
 if [[ "$BOUNDS_MODE" != "auto" && "$BOUNDS_MODE" != "manual" ]]; then
   echo "Invalid BOUNDS_MODE=$BOUNDS_MODE (expected auto or manual)" >&2
@@ -691,13 +695,9 @@ ensure_chrome_force_renderer_accessibility() {
   return 0
 }
 
-click_notes_plus_via_hammerspoon_axpress() {
-  if [[ ! "$NOTES_PLUS_CLICK_STEPS" =~ ^[0-9]+$ ]] || (( NOTES_PLUS_CLICK_STEPS <= 0 )); then
-    printf 'skipped:steps\n'
-    return 0
-  fi
-
+resolve_hs_binary() {
   local hs_bin=""
+
   if command -v hs >/dev/null 2>&1; then
     hs_bin="$(command -v hs)"
   elif [[ -x "/opt/homebrew/bin/hs" ]]; then
@@ -705,6 +705,190 @@ click_notes_plus_via_hammerspoon_axpress() {
   elif [[ -x "/usr/local/bin/hs" ]]; then
     hs_bin="/usr/local/bin/hs"
   fi
+
+  printf '%s\n' "$hs_bin"
+}
+
+capture_live_slide_number_via_hammerspoon() {
+  local hs_bin=""
+  local hs_result=""
+  local chrome_app_lua
+  local hs_script
+
+  hs_bin="$(resolve_hs_binary)"
+  if [[ -z "$hs_bin" ]]; then
+    return 1
+  fi
+
+  chrome_app_lua="$(printf '%s' "$CHROME_APP" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  hs_script="$(cat <<LUA
+local ax = require("hs.axuielement")
+local appName = "${chrome_app_lua}"
+
+local app = hs.application.get(appName)
+if not app then
+  print("error:chrome-not-running")
+  return
+end
+
+local targetWindow = nil
+for _, oneWindow in ipairs(app:allWindows()) do
+  local title = oneWindow:title() or ""
+  if title:find("Presenter view", 1, true) then
+    if oneWindow:isFullScreen() then
+      targetWindow = oneWindow
+      break
+    end
+    if not targetWindow then
+      targetWindow = oneWindow
+    end
+  end
+end
+
+if not targetWindow then
+  print("error:presenter-window-not-found")
+  return
+end
+
+local root = ax.windowElement(targetWindow)
+if not root then
+  print("error:presenter-ax-root-not-found")
+  return
+end
+
+local queue = {root}
+local safetyCounter = 0
+
+while #queue > 0 and safetyCounter < 5000 do
+  safetyCounter = safetyCounter + 1
+  local element = table.remove(queue, 1)
+  for _, attributeName in ipairs({"AXTitle", "AXDescription", "AXValue"}) do
+    local rawValue = element:attributeValue(attributeName)
+    local text = tostring(rawValue or "")
+    local slideNumber = text:match("[Ss]lide%s+(%d+)%s+of%s+%d+")
+    if slideNumber then
+      print(slideNumber)
+      return
+    end
+  end
+
+  local children = element:attributeValue("AXChildren")
+  if type(children) == "table" then
+    for _, child in ipairs(children) do
+      if type(child) == "userdata" then
+        table.insert(queue, child)
+      end
+    end
+  end
+end
+
+print("error:slide-number-not-found")
+LUA
+)"
+
+  hs_result="$("$hs_bin" -c "$hs_script" 2>/dev/null || true)"
+  hs_result="$(printf '%s' "$hs_result" | tr -d '\r' | tail -n 1)"
+
+  if [[ "$hs_result" =~ ^[0-9]+$ ]] && (( hs_result > 0 )); then
+    printf '%s\n' "$hs_result"
+    return 0
+  fi
+
+  return 1
+}
+
+restore_slide_number_via_hammerspoon() {
+  local slide_number="$1"
+  local hs_bin=""
+  local hs_result=""
+  local chrome_app_lua
+  local hs_script
+
+  if [[ ! "$slide_number" =~ ^[0-9]+$ ]] || (( slide_number <= 0 )); then
+    printf 'error:invalid-slide-number\n'
+    return 1
+  fi
+
+  hs_bin="$(resolve_hs_binary)"
+  if [[ -z "$hs_bin" ]]; then
+    printf 'error:hs-not-found\n'
+    return 1
+  fi
+
+  chrome_app_lua="$(printf '%s' "$CHROME_APP" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  hs_script="$(cat <<LUA
+local appName = "${chrome_app_lua}"
+local slideNumber = tonumber("${slide_number}") or 0
+
+if slideNumber <= 0 then
+  print("error:invalid-slide-number")
+  return
+end
+
+local app = hs.application.get(appName)
+if not app then
+  print("error:chrome-not-running")
+  return
+end
+
+local targetWindow = nil
+local fallbackWindow = nil
+
+for _, oneWindow in ipairs(app:allWindows()) do
+  local title = oneWindow:title() or ""
+  if oneWindow:isStandard() and title:find("Google Slides", 1, true) and not title:find("Presenter view", 1, true) then
+    if oneWindow:isFullScreen() then
+      targetWindow = oneWindow
+      break
+    end
+    if not targetWindow then
+      targetWindow = oneWindow
+    end
+  end
+
+  if oneWindow:isStandard() and not fallbackWindow then
+    fallbackWindow = oneWindow
+  end
+end
+
+if not targetWindow then
+  targetWindow = fallbackWindow
+end
+
+if not targetWindow then
+  print("error:slides-window-not-found")
+  return
+end
+
+app:activate(true)
+targetWindow:focus()
+hs.timer.usleep(180000)
+hs.eventtap.keyStrokes(tostring(math.floor(slideNumber)))
+hs.timer.usleep(70000)
+hs.eventtap.keyStroke({}, "return")
+print("jumped:" .. tostring(math.floor(slideNumber)))
+LUA
+)"
+
+  hs_result="$("$hs_bin" -c "$hs_script" 2>/dev/null || true)"
+  hs_result="$(printf '%s' "$hs_result" | tr -d '\r' | tail -n 1)"
+
+  if [[ -z "$hs_result" ]]; then
+    hs_result="error:empty-slide-restore-result"
+  fi
+
+  printf '%s\n' "$hs_result"
+  [[ "$hs_result" == jumped:* ]]
+}
+
+click_notes_plus_via_hammerspoon_axpress() {
+  if [[ ! "$NOTES_PLUS_CLICK_STEPS" =~ ^[0-9]+$ ]] || (( NOTES_PLUS_CLICK_STEPS <= 0 )); then
+    printf 'skipped:steps\n'
+    return 0
+  fi
+
+  local hs_bin=""
+  hs_bin="$(resolve_hs_binary)"
 
   if [[ -z "$hs_bin" ]]; then
     printf 'error:hs-not-found\n'
@@ -991,6 +1175,13 @@ if [[ "$EXIT_EXISTING_FULLSCREEN" == "1" ]]; then
      end if
    end tell
 APPLESCRIPT
+fi
+
+if [[ "$RESTORE_PREVIOUS_SLIDE_ON_REFRESH" == "1" ]]; then
+  RESTORE_SLIDE_NUMBER="$(capture_live_slide_number_via_hammerspoon || true)"
+fi
+if [[ "$RESTORE_SLIDE_NUMBER" =~ ^[0-9]+$ ]] && (( RESTORE_SLIDE_NUMBER > 0 )); then
+  echo "[slides_machine_runner] restore previous slide=$RESTORE_SLIDE_NUMBER"
 fi
 
 ensure_chrome_force_renderer_accessibility
@@ -1816,6 +2007,15 @@ if (( should_try_axpress == 1 )); then
     fi
   fi
 fi
+
+if [[ "$RESTORE_SLIDE_NUMBER" =~ ^[0-9]+$ ]] && (( RESTORE_SLIDE_NUMBER > 0 )); then
+  RESTORE_SLIDE_RESULT="$(restore_slide_number_via_hammerspoon "$RESTORE_SLIDE_NUMBER" || true)"
+  sleep 0.2
+fi
+
+echo "[slides_machine_runner] RESTORE_PREVIOUS_SLIDE_ON_REFRESH=$RESTORE_PREVIOUS_SLIDE_ON_REFRESH"
+echo "[slides_machine_runner] RESTORE_SLIDE_NUMBER=${RESTORE_SLIDE_NUMBER:-none}"
+echo "[slides_machine_runner] RESTORE_SLIDE_RESULT=$RESTORE_SLIDE_RESULT"
 
 echo "[slides_machine_runner] NOTES_METHOD_CONFIG=$notes_method_config"
 echo "[slides_machine_runner] NOTES_METHOD_USED=$notes_method_used"

@@ -132,6 +132,7 @@ cp config/local.env.example config/local.env
 - optionally `SLIDES_NOTES_URL` if you don't want shortcut-generated notes
 - `BOUNDS_MODE` (`auto` recommended, `manual` available)
 - `DISPLAY_ASSIGNMENT` (`slides:extended,notes:desktop`)
+- `RESTORE_PREVIOUS_SLIDE_ON_REFRESH` (`1` by default; restores the live presenter slide after refresh)
 - optional manual-only: `PRIMARY_BOUNDS`, `NOTES_BOUNDS`
 - optional timing tune:
   - `LAUNCH_DELAY_SECONDS` (post-action settle delay)
@@ -356,3 +357,4 @@ With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any G
 - Open the deck you want in Chrome.
 - Make it the active tab (recommended).
 - Press the hotkey or trigger script.
+- If presenter view is already open, refresh preserves the current slide number by default.
