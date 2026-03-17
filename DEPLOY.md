@@ -163,7 +163,10 @@ curl "http://<slides-machine-ip>:8765/slides/jump?slide=25"
 curl "http://<slides-machine-ip>:8765/slides/notes/font/up/7"
 curl "http://<slides-machine-ip>:8765/slides/notes/font/down/3"
 curl "http://<slides-machine-ip>:8765/slides/notes/font?dir=up&steps=7"
+curl "http://<slides-machine-ip>:8765/slides/notes/layout/80"
+curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
+The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run`.
 
 ## 7) Two-machine trigger options
 

@@ -20,17 +20,32 @@ local hotkeyKey = "r"
 -- HTTP control endpoint (for remote curl triggers on same VLAN)
 local httpInterface = "en0"
 local httpPort = 8765
+-- Automatically bias presenter view toward speaker notes after a successful run.
+-- Set to 0 to disable automatic post-run layout adjustment.
+local defaultNotesLayoutNotesPercent = 80
+
+local setNotesPaneLayout
 
 local function runSlidesTrigger()
   local args = {"--mode", triggerMode, "--config", triggerConfig}
 
   local task = hs.task.new(triggerScript, function(exitCode, stdOut, stdErr)
+    local layoutDetail = nil
+
+    if exitCode == 0 and defaultNotesLayoutNotesPercent > 0 and setNotesPaneLayout then
+      local _, detail = setNotesPaneLayout(defaultNotesLayoutNotesPercent)
+      layoutDetail = detail
+    end
+
     if exitCode == 0 then
       hs.notify.new({ title = "Slides", informativeText = "Refresh triggered" }):send()
     else
       hs.notify.new({ title = "Slides", informativeText = "Refresh failed (" .. tostring(exitCode) .. ")" }):send()
     end
 
+    if layoutDetail and #layoutDetail > 0 then
+      print(layoutDetail)
+    end
     if stdOut and #stdOut > 0 then print(stdOut) end
     if stdErr and #stdErr > 0 then print(stdErr) end
     return true
@@ -145,6 +160,31 @@ local function parseNotesFontRequest(path)
   end
 
   return nil, nil, nil
+end
+
+local function parseNotesLayoutRequest(path)
+  local route, query = splitRouteAndQuery(path)
+
+  local byRoute = route:match("^/slides/notes/layout/(%d+)$")
+  if byRoute then
+    return tonumber(byRoute), nil
+  end
+
+  if route == "/slides/notes/layout" then
+    local notesPercent = parseNumericQueryValue(query, {"notes", "notes_percent", "n"})
+    if notesPercent then
+      return notesPercent, nil
+    end
+
+    local previewPercent = parseNumericQueryValue(query, {"preview", "slides", "slides_percent"})
+    if previewPercent then
+      return 100 - previewPercent, nil
+    end
+
+    return nil, "missing-or-invalid-notes-percent"
+  end
+
+  return nil, nil
 end
 
 local function findSlidesWindow(chromeApp)
@@ -320,6 +360,145 @@ local function adjustNotesFont(direction, steps)
   return true, string.format("adjusted:%s:%d:x=%d:y=%d:source=axpress", direction, stepCount, centerX, centerY)
 end
 
+local function findNotesDivider(presenterWindow, root)
+  local presenterFrame = presenterWindow:frame()
+  if not presenterFrame then
+    return nil
+  end
+
+  local leftLimit = presenterFrame.x + (presenterFrame.w * 0.10)
+  local rightLimit = presenterFrame.x + (presenterFrame.w * 0.90)
+  local queue = {root}
+  local bestCandidate = nil
+  local bestScore = -1
+  local safetyCounter = 0
+
+  while #queue > 0 and safetyCounter < 5000 do
+    safetyCounter = safetyCounter + 1
+    local element = table.remove(queue, 1)
+    local role = tostring(element:attributeValue("AXRole") or "")
+    local frame = element:attributeValue("AXFrame")
+
+    if (role == "AXGroup" or role == "AXSplitter") and type(frame) == "table" then
+      local fx = frame.x or frame.X or frame[1] or 0
+      local fy = frame.y or frame.Y or frame[2] or 0
+      local fw = frame.w or frame.W or frame[3] or 0
+      local fh = frame.h or frame.H or frame[4] or 0
+      local centerX = fx + (fw / 2)
+
+      if fw > 0 and fw <= 20 and fh >= presenterFrame.h * 0.45 and centerX >= leftLimit and centerX <= rightLimit then
+        local score = fh
+        if centerX >= presenterFrame.x + (presenterFrame.w * 0.25) and centerX <= presenterFrame.x + (presenterFrame.w * 0.75) then
+          score = score + 500
+        end
+        if fh >= presenterFrame.h * 0.75 then
+          score = score + 250
+        end
+
+        if score > bestScore then
+          bestScore = score
+          bestCandidate = {
+            element = element,
+            frame = {x = fx, y = fy, w = fw, h = fh},
+          }
+        end
+      end
+    end
+
+    local children = element:attributeValue("AXChildren")
+    if type(children) == "table" then
+      for _, child in ipairs(children) do
+        if type(child) == "userdata" then
+          table.insert(queue, child)
+        end
+      end
+    end
+  end
+
+  return bestCandidate
+end
+
+setNotesPaneLayout = function(notesPercent)
+  if type(notesPercent) ~= "number" then
+    return false, "invalid-notes-percent"
+  end
+
+  local targetNotesPercent = math.floor(notesPercent + 0.5)
+  if targetNotesPercent < 55 or targetNotesPercent > 90 then
+    return false, "notes-percent-out-of-range"
+  end
+
+  local chrome = hs.application.get("Google Chrome")
+  if not chrome then
+    return false, "chrome-not-running"
+  end
+
+  local presenterWindow = findPresenterWindow(chrome)
+  if not presenterWindow then
+    return false, "presenter-window-not-found"
+  end
+
+  chrome:activate(true)
+  presenterWindow:focus()
+  hs.timer.usleep(180000)
+
+  local ax = require("hs.axuielement")
+  local root = ax.windowElement(presenterWindow)
+  if not root then
+    return false, "presenter-ax-root-not-found"
+  end
+
+  local divider = findNotesDivider(presenterWindow, root)
+  if not divider then
+    return false, "notes-divider-not-found"
+  end
+
+  local presenterFrame = presenterWindow:frame()
+  if not presenterFrame or presenterFrame.w <= 0 then
+    return false, "presenter-frame-not-found"
+  end
+
+  local startX = math.floor(divider.frame.x + (divider.frame.w / 2) + 0.5)
+  local startY = math.floor(divider.frame.y + (divider.frame.h / 2) + 0.5)
+  local previewPercent = 100 - targetNotesPercent
+  local targetX = math.floor(presenterFrame.x + (presenterFrame.w * previewPercent / 100) + 0.5)
+
+  local minimumX = math.floor(presenterFrame.x + (presenterFrame.w * 0.10) + 0.5)
+  local maximumX = math.floor(presenterFrame.x + (presenterFrame.w * 0.90) + 0.5)
+  if targetX < minimumX then targetX = minimumX end
+  if targetX > maximumX then targetX = maximumX end
+
+  local originalMouse = hs.mouse.absolutePosition()
+  hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDown, {x = startX, y = startY}):post()
+  hs.timer.usleep(120000)
+  hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDragged, {x = targetX, y = startY}):post()
+  hs.timer.usleep(200000)
+  hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseUp, {x = targetX, y = startY}):post()
+  hs.timer.usleep(250000)
+  hs.mouse.absolutePosition(originalMouse)
+
+  local refreshedRoot = ax.windowElement(presenterWindow)
+  local refreshedDivider = nil
+  if refreshedRoot then
+    refreshedDivider = findNotesDivider(presenterWindow, refreshedRoot)
+  end
+
+  local actualNotesPercent = targetNotesPercent
+  if refreshedDivider then
+    local actualX = refreshedDivider.frame.x + (refreshedDivider.frame.w / 2)
+    actualNotesPercent = math.floor((100 - (((actualX - presenterFrame.x) / presenterFrame.w) * 100)) + 0.5)
+  end
+
+  return true, string.format(
+    "layout:notes=%d:preview=%d:from=%d:to=%d:actualNotes=%d",
+    targetNotesPercent,
+    100 - targetNotesPercent,
+    startX,
+    targetX,
+    actualNotesPercent
+  )
+end
+
 local function onHttpRequest(method, path, _, _)
   if method == "GET" and path == "/slides/health" then
     return jsonResponse('{"ok":true,"service":"slides-trigger"}', 200)
@@ -361,6 +540,26 @@ local function onHttpRequest(method, path, _, _)
     return jsonResponse(body, 500)
   end
 
+  local notesLayoutPercent, notesLayoutParseError = nil, nil
+  if method == "GET" or method == "POST" then
+    notesLayoutPercent, notesLayoutParseError = parseNotesLayoutRequest(path)
+  end
+
+  if notesLayoutParseError then
+    local body = string.format('{"ok":false,"error":"%s"}', jsonEscape(notesLayoutParseError))
+    return jsonResponse(body, 400)
+  end
+
+  if notesLayoutPercent then
+    local ok, detail = setNotesPaneLayout(notesLayoutPercent)
+    if ok then
+      local body = string.format('{"ok":true,"notesPercent":%d,"previewPercent":%d,"detail":"%s"}', notesLayoutPercent, 100 - notesLayoutPercent, jsonEscape(detail))
+      return jsonResponse(body, 200)
+    end
+    local body = string.format('{"ok":false,"notesPercent":%d,"previewPercent":%d,"error":"%s"}', notesLayoutPercent, 100 - notesLayoutPercent, jsonEscape(detail))
+    return jsonResponse(body, 500)
+  end
+
   if (method == "GET" or method == "POST") and path == "/slides/run" then
     runSlidesTrigger()
     return jsonResponse('{"ok":true,"triggered":true}', 200)
@@ -379,3 +578,4 @@ _G.slidesHttpServer = server
 print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
 print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
 print("Slides HTTP notes font ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
+print("Slides HTTP notes layout ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/layout/80")

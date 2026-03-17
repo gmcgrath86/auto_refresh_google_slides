@@ -206,6 +206,7 @@ EOF
   echo "Remote health endpoint:  http://<this-machine-ip>:8765/slides/health"
   echo "Remote jump endpoint:    http://<this-machine-ip>:8765/slides/jump/<number>"
   echo "Remote notes endpoint:   http://<this-machine-ip>:8765/slides/notes/font/up/<steps>"
+  echo "Remote layout endpoint:  http://<this-machine-ip>:8765/slides/notes/layout/80"
 }
 
 create_if_missing() {

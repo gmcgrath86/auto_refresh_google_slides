@@ -319,6 +319,7 @@ Notes:
 
 ## Remote HTTP trigger (same VLAN)
 When hotkey setup is installed via `bootstrap_machine.sh --install-hotkey`, Hammerspoon also starts an HTTP API on `en0:8765`.
+The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run`.
 
 Commands from another machine on the same network:
 ```bash
@@ -342,6 +343,12 @@ curl "http://<slides-machine-ip>:8765/slides/notes/font/down/3"
 
 # equivalent query-string form
 curl "http://<slides-machine-ip>:8765/slides/notes/font?dir=up&steps=7"
+
+# set presenter notes layout to 80% notes / 20% slide preview
+curl "http://<slides-machine-ip>:8765/slides/notes/layout/80"
+
+# equivalent query-string form
+curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
 
 ## Deck behavior
