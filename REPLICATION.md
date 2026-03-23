@@ -74,6 +74,7 @@ IP="$(ipconfig getifaddr en0)"
 
 curl "http://$IP:8765/slides/health"
 curl "http://$IP:8765/slides/run"
+curl "http://$IP:8765/slides/status"
 curl "http://$IP:8765/slides/jump/25"
 curl "http://$IP:8765/slides/notes/font/up/7"
 curl "http://$IP:8765/slides/notes/font/down/3"
@@ -88,4 +89,3 @@ tail -n 100 /tmp/slides-hotkey.log
 Look for:
 - `NOTES_METHOD_USED=ax`
 - `NOTES_CLICK_DETAIL=clicked:...:source=axpress`
-

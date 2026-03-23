@@ -330,6 +330,9 @@ curl "http://<slides-machine-ip>:8765/slides/health"
 # refresh now
 curl "http://<slides-machine-ip>:8765/slides/run"
 
+# latest refresh status
+curl "http://<slides-machine-ip>:8765/slides/status"
+
 # jump to an exact slide number
 curl "http://<slides-machine-ip>:8765/slides/jump/25"
 
@@ -351,6 +354,8 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout/80"
 # equivalent query-string form
 curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
+
+`/slides/run` now returns `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.
 
 ## Deck behavior
 With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any Google Slides deck:

@@ -25,37 +25,220 @@ local httpPort = 8765
 local defaultNotesLayoutNotesPercent = 80
 
 local setNotesPaneLayout
+local refreshRunSequence = 0
+local refreshRunsById = {}
+local refreshRunOrder = {}
+local activeRefreshRunId = nil
+local activeRefreshTask = nil
+local maxRefreshRunsToKeep = 20
+
+local function isoTimestamp()
+  return os.date("!%Y-%m-%dT%H:%M:%SZ")
+end
+
+local function summarizeText(value, maxLen)
+  local text = tostring(value or "")
+  text = text:gsub("\r\n", "\n")
+  text = text:gsub("\r", "\n")
+  text = text:gsub("^%s+", "")
+  text = text:gsub("%s+$", "")
+
+  if #text == 0 then
+    return nil
+  end
+
+  maxLen = maxLen or 2000
+  if #text > maxLen then
+    text = "..." .. text:sub(#text - maxLen + 4)
+  end
+
+  return text
+end
+
+local function nextRefreshRunId()
+  refreshRunSequence = refreshRunSequence + 1
+  return string.format("%s-%04d", os.date("!%Y%m%dT%H%M%SZ"), refreshRunSequence)
+end
+
+local function trackRefreshRun(run)
+  refreshRunsById[run.runId] = run
+
+  if not run._tracked then
+    run._tracked = true
+    table.insert(refreshRunOrder, run.runId)
+  end
+
+  while #refreshRunOrder > maxRefreshRunsToKeep do
+    local oldestRunId = table.remove(refreshRunOrder, 1)
+    if oldestRunId ~= activeRefreshRunId then
+      refreshRunsById[oldestRunId] = nil
+    end
+  end
+end
+
+local function buildRefreshRunPayload(run)
+  if not run then
+    return {
+      ok = true,
+      accepted = false,
+      state = "idle",
+      running = false,
+      completed = false,
+      message = "no refresh has been triggered yet",
+    }
+  end
+
+  return {
+    ok = run.state ~= "failed",
+    accepted = run.accepted == true,
+    runId = run.runId,
+    state = run.state,
+    running = run.state == "running",
+    completed = run.state == "succeeded" or run.state == "failed",
+    message = run.message,
+    acceptedAt = run.acceptedAt,
+    startedAt = run.startedAt,
+    finishedAt = run.finishedAt,
+    exitCode = run.exitCode,
+    error = run.error,
+    detail = run.detail,
+    stdout = run.stdout,
+    stderr = run.stderr,
+    layoutDetail = run.layoutDetail,
+    statusPath = "/slides/status/" .. run.runId,
+  }
+end
+
+local function makeRefreshFailureDetail(exitCode, stdOut, stdErr, layoutDetail)
+  local stderrSummary = summarizeText(stdErr, 1200)
+  local stdoutSummary = summarizeText(stdOut, 1200)
+  local layoutSummary = summarizeText(layoutDetail, 1200)
+
+  if tonumber(exitCode or 0) ~= 0 then
+    return stderrSummary or stdoutSummary or ("refresh script exited with code " .. tostring(exitCode))
+  end
+
+  return layoutSummary or "refresh finished with an unknown error"
+end
+
+local function completeRefreshRun(runId, exitCode, stdOut, stdErr)
+  local run = refreshRunsById[runId]
+  if not run then
+    return
+  end
+
+  local layoutOk = true
+  local layoutDetail = nil
+
+  if tonumber(exitCode or 0) == 0 and defaultNotesLayoutNotesPercent > 0 and setNotesPaneLayout then
+    local ok, resultOk, resultDetail = pcall(setNotesPaneLayout, defaultNotesLayoutNotesPercent)
+    if ok then
+      layoutOk = resultOk
+      layoutDetail = resultDetail
+    else
+      layoutOk = false
+      layoutDetail = tostring(resultOk)
+    end
+  end
+
+  run.finishedAt = isoTimestamp()
+  run.exitCode = tonumber(exitCode or 0) or 0
+  run.stdout = summarizeText(stdOut, 2000)
+  run.stderr = summarizeText(stdErr, 2000)
+  run.layoutDetail = summarizeText(layoutDetail, 1000)
+
+  if run.exitCode == 0 and layoutOk ~= false then
+    run.state = "succeeded"
+    run.message = "refresh finished"
+    run.detail = "all refresh steps completed successfully"
+    run.error = nil
+  else
+    run.state = "failed"
+    run.message = "refresh failed"
+    run.detail = "one or more refresh steps failed"
+    run.error = makeRefreshFailureDetail(run.exitCode, stdOut, stdErr, layoutDetail)
+  end
+
+  activeRefreshRunId = nil
+  activeRefreshTask = nil
+  trackRefreshRun(run)
+
+  if run.layoutDetail and #run.layoutDetail > 0 then
+    print(run.layoutDetail)
+  end
+  if stdOut and #stdOut > 0 then print(stdOut) end
+  if stdErr and #stdErr > 0 then print(stdErr) end
+end
 
 local function runSlidesTrigger()
+  if activeRefreshRunId then
+    local activeRun = refreshRunsById[activeRefreshRunId]
+    hs.notify.new({ title = "Slides", informativeText = "Refresh already running" }):send()
+    return false, activeRun, "refresh-already-running"
+  end
+
+  local run = {
+    runId = nextRefreshRunId(),
+    accepted = true,
+    state = "running",
+    message = "refresh accepted and started",
+    detail = "the refresh command was accepted and execution has started",
+    acceptedAt = isoTimestamp(),
+    startedAt = isoTimestamp(),
+  }
+  trackRefreshRun(run)
+  activeRefreshRunId = run.runId
+
   local args = {"--mode", triggerMode, "--config", triggerConfig}
 
   local task = hs.task.new(triggerScript, function(exitCode, stdOut, stdErr)
-    local layoutDetail = nil
+    completeRefreshRun(run.runId, exitCode, stdOut, stdErr)
+    local completedRun = refreshRunsById[run.runId]
 
-    if exitCode == 0 and defaultNotesLayoutNotesPercent > 0 and setNotesPaneLayout then
-      local _, detail = setNotesPaneLayout(defaultNotesLayoutNotesPercent)
-      layoutDetail = detail
-    end
-
-    if exitCode == 0 then
-      hs.notify.new({ title = "Slides", informativeText = "Refresh triggered" }):send()
+    if completedRun and completedRun.state == "succeeded" then
+      hs.notify.new({ title = "Slides", informativeText = "Refresh finished" }):send()
     else
-      hs.notify.new({ title = "Slides", informativeText = "Refresh failed (" .. tostring(exitCode) .. ")" }):send()
+      local failureText = "Refresh failed"
+      if completedRun and completedRun.error and #completedRun.error > 0 then
+        failureText = completedRun.error
+      elseif exitCode ~= nil then
+        failureText = "Refresh failed (" .. tostring(exitCode) .. ")"
+      end
+      hs.notify.new({ title = "Slides", informativeText = failureText }):send()
     end
 
-    if layoutDetail and #layoutDetail > 0 then
-      print(layoutDetail)
-    end
-    if stdOut and #stdOut > 0 then print(stdOut) end
-    if stdErr and #stdErr > 0 then print(stdErr) end
     return true
   end, args)
 
-  if task then
-    task:start()
-  else
+  if not task then
+    run.state = "failed"
+    run.message = "refresh failed"
+    run.detail = "failed to create the refresh task"
+    run.error = "failed to create the refresh task"
+    run.finishedAt = isoTimestamp()
+    activeRefreshRunId = nil
+    activeRefreshTask = nil
+    trackRefreshRun(run)
     hs.notify.new({ title = "Slides", informativeText = "Failed to create hotkey task" }):send()
+    return false, run, "failed-to-create-task"
   end
+
+  activeRefreshTask = task
+  local started = task:start()
+  if not started then
+    run.state = "failed"
+    run.message = "refresh failed"
+    run.detail = "failed to start the refresh task"
+    run.error = "failed to start the refresh task"
+    run.finishedAt = isoTimestamp()
+    activeRefreshRunId = nil
+    activeRefreshTask = nil
+    trackRefreshRun(run)
+    hs.notify.new({ title = "Slides", informativeText = "Failed to start refresh task" }):send()
+    return false, run, "failed-to-start-task"
+  end
+
+  return true, run
 end
 
 hs.hotkey.bind(hotkeyMods, hotkeyKey, runSlidesTrigger)
@@ -68,6 +251,15 @@ end
 
 local function jsonResponse(body, status)
   return body, status, { ["Content-Type"] = "application/json" }
+end
+
+local function jsonResponseValue(value, status)
+  local ok, encoded = pcall(hs.json.encode, value)
+  if not ok or not encoded then
+    return jsonResponse('{"ok":false,"error":"json-encode-failed"}', 500)
+  end
+
+  return jsonResponse(encoded, status)
 end
 
 local function jsonEscape(value)
@@ -185,6 +377,21 @@ local function parseNotesLayoutRequest(path)
   end
 
   return nil, nil
+end
+
+local function parseRefreshStatusRequest(path)
+  local route = splitRouteAndQuery(path)
+
+  if route == "/slides/status" then
+    return true, nil
+  end
+
+  local byRoute = route:match("^/slides/status/([%w%._%-]+)$")
+  if byRoute then
+    return true, byRoute
+  end
+
+  return false, nil
 end
 
 local function findSlidesWindow(chromeApp)
@@ -504,6 +711,32 @@ local function onHttpRequest(method, path, _, _)
     return jsonResponse('{"ok":true,"service":"slides-trigger"}', 200)
   end
 
+  local isRefreshStatusRequest, requestedRunId = false, nil
+  if method == "GET" then
+    isRefreshStatusRequest, requestedRunId = parseRefreshStatusRequest(path)
+  end
+
+  if isRefreshStatusRequest then
+    local targetRun = nil
+
+    if requestedRunId then
+      targetRun = refreshRunsById[requestedRunId]
+      if not targetRun then
+        return jsonResponseValue({
+          ok = false,
+          error = "run-not-found",
+          runId = requestedRunId,
+        }, 404)
+      end
+    elseif activeRefreshRunId then
+      targetRun = refreshRunsById[activeRefreshRunId]
+    elseif #refreshRunOrder > 0 then
+      targetRun = refreshRunsById[refreshRunOrder[#refreshRunOrder]]
+    end
+
+    return jsonResponseValue(buildRefreshRunPayload(targetRun), 200)
+  end
+
   local slideNumber = nil
   if method == "GET" or method == "POST" then
     slideNumber = parseSlideNumberFromPath(path)
@@ -561,8 +794,26 @@ local function onHttpRequest(method, path, _, _)
   end
 
   if (method == "GET" or method == "POST") and path == "/slides/run" then
-    runSlidesTrigger()
-    return jsonResponse('{"ok":true,"triggered":true}', 200)
+    local ok, run, reason = runSlidesTrigger()
+    local payload = buildRefreshRunPayload(run)
+
+    if ok then
+      return jsonResponseValue(payload, 202)
+    end
+
+    if reason == "refresh-already-running" then
+      payload.ok = false
+      payload.accepted = false
+      payload.message = "refresh already running"
+      payload.detail = "the refresh command was not accepted because another refresh is already in progress"
+      payload.error = "refresh-already-running"
+      return jsonResponseValue(payload, 409)
+    end
+
+    payload.ok = false
+    payload.accepted = false
+    payload.error = payload.error or reason or "refresh-start-failed"
+    return jsonResponseValue(payload, 500)
   end
 
   return jsonResponse('{"ok":false,"error":"not_found"}', 404)
@@ -576,6 +827,7 @@ server:start()
 _G.slidesHttpServer = server
 
 print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
+print("Slides HTTP status ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/status")
 print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
 print("Slides HTTP notes font ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
 print("Slides HTTP notes layout ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/layout/80")
