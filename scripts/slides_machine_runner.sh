@@ -45,6 +45,13 @@ Optional config variables:
   OPEN_RETRY_DELAY_SECONDS=1.0
   WINDOW_WAIT_TIMEOUT_SECONDS=20
   RESTORE_PREVIOUS_SLIDE_ON_REFRESH=1
+  RESTORE_SLIDE_CAPTURE_RETRY_COUNT=8
+  RESTORE_SLIDE_CAPTURE_RETRY_DELAY_SECONDS=0.35
+  RESTORE_SLIDE_JUMP_RETRY_COUNT=3
+  RESTORE_SLIDE_JUMP_RETRY_DELAY_SECONDS=0.4
+  RESTORE_SLIDE_VERIFY_RETRY_COUNT=12
+  RESTORE_SLIDE_VERIFY_RETRY_DELAY_SECONDS=0.4
+  RESTORE_SLIDE_REQUIRE_CAPTURE_WHEN_PRESENTING=1
 USAGE
 }
 
@@ -97,6 +104,13 @@ OPEN_RETRY_DELAY_SECONDS="${OPEN_RETRY_DELAY_SECONDS:-1.0}"
 WINDOW_WAIT_TIMEOUT_SECONDS="${WINDOW_WAIT_TIMEOUT_SECONDS:-20}"
 NOTES_SHORTCUT_MAX_WAIT_SECONDS="${NOTES_SHORTCUT_MAX_WAIT_SECONDS:-$WINDOW_WAIT_TIMEOUT_SECONDS}"
 RESTORE_PREVIOUS_SLIDE_ON_REFRESH="${RESTORE_PREVIOUS_SLIDE_ON_REFRESH:-1}"
+RESTORE_SLIDE_CAPTURE_RETRY_COUNT="${RESTORE_SLIDE_CAPTURE_RETRY_COUNT:-8}"
+RESTORE_SLIDE_CAPTURE_RETRY_DELAY_SECONDS="${RESTORE_SLIDE_CAPTURE_RETRY_DELAY_SECONDS:-0.35}"
+RESTORE_SLIDE_JUMP_RETRY_COUNT="${RESTORE_SLIDE_JUMP_RETRY_COUNT:-3}"
+RESTORE_SLIDE_JUMP_RETRY_DELAY_SECONDS="${RESTORE_SLIDE_JUMP_RETRY_DELAY_SECONDS:-0.4}"
+RESTORE_SLIDE_VERIFY_RETRY_COUNT="${RESTORE_SLIDE_VERIFY_RETRY_COUNT:-12}"
+RESTORE_SLIDE_VERIFY_RETRY_DELAY_SECONDS="${RESTORE_SLIDE_VERIFY_RETRY_DELAY_SECONDS:-0.4}"
+RESTORE_SLIDE_REQUIRE_CAPTURE_WHEN_PRESENTING="${RESTORE_SLIDE_REQUIRE_CAPTURE_WHEN_PRESENTING:-1}"
 
 # Prefer AXPress over coordinate clicking when auto mode is selected.
 if [[ "$NOTES_PLUS_METHOD" == "auto" && "$CHROME_FORCE_RENDERER_ACCESSIBILITY" == "1" ]]; then
@@ -112,8 +126,14 @@ SLIDES_LAUNCH_URL=""
 SOURCE_DECK_ID=""
 DISPLAY_COUNT=""
 BOUNDS_SOURCE=""
+RESTORE_PRESENT_URL=""
+RESTORE_PRESENT_SLIDE_ID=""
 RESTORE_SLIDE_NUMBER=""
 RESTORE_SLIDE_RESULT="skipped"
+RESTORE_SLIDE_CAPTURE_RESULT="not-attempted"
+RESTORE_SLIDE_PRESENTATION_OPEN="unknown"
+LAST_CAPTURE_LIVE_SLIDE_RESULT=""
+LAST_PRESENTER_WINDOW_CHECK_RESULT=""
 
 if [[ "$BOUNDS_MODE" != "auto" && "$BOUNDS_MODE" != "manual" ]]; then
   echo "Invalid BOUNDS_MODE=$BOUNDS_MODE (expected auto or manual)" >&2
@@ -257,6 +277,101 @@ derive_source_url() {
   fi
 
   printf '%s\n' "$source_url"
+}
+
+extract_slide_param_from_url() {
+  local input_url="$1"
+
+  if [[ "$input_url" =~ (^|[?&])slide=([^&#]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  return 1
+}
+
+capture_live_present_url() {
+  local present_url=""
+
+  present_url="$(
+    CHROME_APP_RUNTIME="$CHROME_APP" /usr/bin/osascript <<'APPLESCRIPT' 2>/dev/null || true
+set chromeApp to system attribute "CHROME_APP_RUNTIME"
+
+using terms from application "Google Chrome"
+  tell application chromeApp
+    set windowCount to count of windows
+
+    repeat with i from 1 to windowCount
+      set oneTitle to ""
+      set oneURL to ""
+
+      try
+        set oneTitle to title of active tab of window i
+      end try
+
+      try
+        set oneURL to URL of active tab of window i
+      end try
+
+      if oneURL contains "/presentation/d/" and oneURL contains "/present" and oneTitle does not contain "Presenter view" then
+        return oneURL
+      end if
+    end repeat
+
+    repeat with i from 1 to windowCount
+      set oneURL to ""
+      try
+        set oneURL to URL of active tab of window i
+      end try
+
+      if oneURL contains "/presentation/d/" and oneURL contains "/present" then
+        return oneURL
+      end if
+    end repeat
+  end tell
+end using terms from
+APPLESCRIPT
+  )"
+
+  present_url="$(printf '%s' "$present_url" | tr -d '\r\n')"
+
+  if [[ "$present_url" =~ ^https?:// && "$present_url" == *"/presentation/d/"* && "$present_url" == *"/present"* ]]; then
+    printf '%s\n' "$present_url"
+    return 0
+  fi
+
+  return 1
+}
+
+verify_live_present_slide_id() {
+  local expected_slide_id="$1"
+  local current_present_url=""
+  local current_slide_id=""
+
+  if [[ -z "$expected_slide_id" ]]; then
+    printf 'error:missing-slide-id\n'
+    return 1
+  fi
+
+  current_present_url="$(capture_live_present_url || true)"
+  if [[ -z "$current_present_url" ]]; then
+    printf 'error:present-url-not-found\n'
+    return 1
+  fi
+
+  current_slide_id="$(extract_slide_param_from_url "$current_present_url" || true)"
+  if [[ "$current_slide_id" == "$expected_slide_id" ]]; then
+    printf 'verified-url:%s\n' "$expected_slide_id"
+    return 0
+  fi
+
+  if [[ -n "$current_slide_id" ]]; then
+    printf 'error:present-url-mismatch:expected=%s:actual=%s\n' "$expected_slide_id" "$current_slide_id"
+  else
+    printf 'error:present-url-missing-slide-param\n'
+  fi
+
+  return 1
 }
 
 ensure_show_notes_param() {
@@ -527,6 +642,22 @@ if [[ -z "$SLIDES_SOURCE_URL" && "$AUTO_CAPTURE_FRONT_TAB" == "1" ]]; then
   SLIDES_SOURCE_URL="$(capture_front_tab_url || true)"
 fi
 
+if [[ "$RESTORE_PREVIOUS_SLIDE_ON_REFRESH" == "1" ]]; then
+  RESTORE_PRESENT_URL="$(capture_live_present_url || true)"
+  if [[ -n "$RESTORE_PRESENT_URL" ]]; then
+    RESTORE_SLIDE_PRESENTATION_OPEN="yes"
+    SLIDES_PRESENT_URL="$RESTORE_PRESENT_URL"
+    SLIDES_SOURCE_URL="$(derive_source_url "$RESTORE_PRESENT_URL" || true)"
+
+    RESTORE_PRESENT_SLIDE_ID="$(extract_slide_param_from_url "$RESTORE_PRESENT_URL" || true)"
+    if [[ -n "$RESTORE_PRESENT_SLIDE_ID" ]]; then
+      RESTORE_SLIDE_CAPTURE_RESULT="captured-url:${RESTORE_PRESENT_SLIDE_ID}"
+    else
+      RESTORE_SLIDE_CAPTURE_RESULT="captured-url:missing-slide-param"
+    fi
+  fi
+fi
+
 if [[ -n "$SLIDES_SOURCE_URL" && "$SLIDES_SOURCE_URL" =~ /presentation/d/[^/?#]+/present([/?#]|$) ]]; then
   SLIDES_SOURCE_URL="$(derive_source_url "$SLIDES_SOURCE_URL" || true)"
 fi
@@ -709,7 +840,128 @@ resolve_hs_binary() {
   printf '%s\n' "$hs_bin"
 }
 
-capture_live_slide_number_via_hammerspoon() {
+ocr_text_from_image() {
+  local image_path="$1"
+
+  swift - "$image_path" <<'SWIFT' 2>/dev/null || true
+import AppKit
+import Foundation
+import Vision
+
+let path = CommandLine.arguments[1]
+guard let image = NSImage(contentsOfFile: path) else {
+  exit(1)
+}
+
+var rect = CGRect(origin: .zero, size: image.size)
+guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
+  exit(1)
+}
+
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .fast
+request.usesLanguageCorrection = false
+
+let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+try? handler.perform([request])
+
+for observation in request.results ?? [] {
+  if let candidate = observation.topCandidates(1).first {
+    print(candidate.string)
+  }
+}
+SWIFT
+}
+
+extract_slide_number_from_text() {
+  local input_text="$1"
+
+  if [[ "$input_text" =~ [Ss]lide[[:space:]]+([0-9]+)[[:space:]]+of[[:space:]]+[0-9]+ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "$input_text" =~ [Ss]lide[[:space:]]+([0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  return 1
+}
+
+capture_slide_number_from_bounds_via_ocr() {
+  local bounds_csv="$1"
+  local capture_height="$2"
+  local label="$3"
+  local left=""
+  local top=""
+  local right=""
+  local bottom=""
+  local width=""
+  local height=""
+  local screenshot_path=""
+  local ocr_text=""
+  local slide_number=""
+
+  IFS=',' read -r left top right bottom <<< "$bounds_csv"
+  if [[ -z "$left" || -z "$top" || -z "$right" || -z "$bottom" ]]; then
+    LAST_CAPTURE_LIVE_SLIDE_RESULT="error:ocr-invalid-bounds:${label}"
+    return 1
+  fi
+
+  width=$(( right - left ))
+  height=$(( bottom - top ))
+  if (( width <= 0 || height <= 0 )); then
+    LAST_CAPTURE_LIVE_SLIDE_RESULT="error:ocr-empty-bounds:${label}"
+    return 1
+  fi
+
+  if (( capture_height > height )); then
+    capture_height="$height"
+  fi
+
+  screenshot_path="$(mktemp "/tmp/slides-ocr-${label}.XXXXXX.png")"
+  if ! screencapture -x -R"${left},${top},${width},${capture_height}" "$screenshot_path" >/dev/null 2>&1; then
+    rm -f "$screenshot_path"
+    LAST_CAPTURE_LIVE_SLIDE_RESULT="error:ocr-screencapture-failed:${label}"
+    return 1
+  fi
+
+  ocr_text="$(ocr_text_from_image "$screenshot_path")"
+  rm -f "$screenshot_path"
+
+  slide_number="$(extract_slide_number_from_text "$ocr_text" || true)"
+  if [[ "$slide_number" =~ ^[0-9]+$ ]] && (( slide_number > 0 )); then
+    LAST_CAPTURE_LIVE_SLIDE_RESULT="ocr:${label}:${slide_number}"
+    printf '%s\n' "$slide_number"
+    return 0
+  fi
+
+  LAST_CAPTURE_LIVE_SLIDE_RESULT="error:ocr-slide-number-not-found:${label}"
+  return 1
+}
+
+capture_live_slide_number_via_screen_ocr() {
+  local slide_number=""
+
+  if [[ -n "${NOTES_BOUNDS:-}" ]]; then
+    if slide_number="$(capture_slide_number_from_bounds_via_ocr "$NOTES_BOUNDS" 240 "notes")"; then
+      printf '%s\n' "$slide_number"
+      return 0
+    fi
+  fi
+
+  if [[ -n "${PRIMARY_BOUNDS:-}" ]]; then
+    if slide_number="$(capture_slide_number_from_bounds_via_ocr "$PRIMARY_BOUNDS" 220 "slides")"; then
+      printf '%s\n' "$slide_number"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+capture_live_slide_number_via_hammerspoon_raw() {
   local hs_bin=""
   local hs_result=""
   local chrome_app_lua
@@ -717,6 +969,7 @@ capture_live_slide_number_via_hammerspoon() {
 
   hs_bin="$(resolve_hs_binary)"
   if [[ -z "$hs_bin" ]]; then
+    printf 'error:hs-not-found\n'
     return 1
   fi
 
@@ -789,6 +1042,20 @@ LUA
   hs_result="$("$hs_bin" -c "$hs_script" 2>/dev/null || true)"
   hs_result="$(printf '%s' "$hs_result" | tr -d '\r' | tail -n 1)"
 
+  if [[ -z "$hs_result" ]]; then
+    hs_result="error:empty-slide-capture-result"
+  fi
+
+  printf '%s\n' "$hs_result"
+}
+
+capture_live_slide_number_via_hammerspoon() {
+  local hs_result=""
+
+  hs_result="$(capture_live_slide_number_via_hammerspoon_raw || true)"
+  hs_result="$(printf '%s' "$hs_result" | tr -d '\r' | tail -n 1)"
+  LAST_CAPTURE_LIVE_SLIDE_RESULT="$hs_result"
+
   if [[ "$hs_result" =~ ^[0-9]+$ ]] && (( hs_result > 0 )); then
     printf '%s\n' "$hs_result"
     return 0
@@ -797,7 +1064,80 @@ LUA
   return 1
 }
 
-restore_slide_number_via_hammerspoon() {
+has_live_presentation_window_via_hammerspoon() {
+  local hs_bin=""
+  local hs_result=""
+  local chrome_app_lua
+  local hs_script
+
+  hs_bin="$(resolve_hs_binary)"
+  if [[ -z "$hs_bin" ]]; then
+    LAST_PRESENTER_WINDOW_CHECK_RESULT="error:hs-not-found"
+    return 1
+  fi
+
+  chrome_app_lua="$(printf '%s' "$CHROME_APP" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  hs_script="$(cat <<LUA
+local appName = "${chrome_app_lua}"
+
+local app = hs.application.get(appName)
+if not app then
+  print("absent")
+  return
+end
+
+for _, oneWindow in ipairs(app:allWindows()) do
+  local title = oneWindow:title() or ""
+  if title:find("Presenter view", 1, true) then
+    print("present")
+    return
+  end
+end
+
+print("absent")
+LUA
+)"
+
+  hs_result="$("$hs_bin" -c "$hs_script" 2>/dev/null || true)"
+  hs_result="$(printf '%s' "$hs_result" | tr -d '\r' | tail -n 1)"
+
+  if [[ -z "$hs_result" ]]; then
+    hs_result="error:empty-presenter-window-check-result"
+  fi
+
+  LAST_PRESENTER_WINDOW_CHECK_RESULT="$hs_result"
+  [[ "$hs_result" == "present" ]]
+}
+
+capture_live_slide_number_with_retries() {
+  local attempt=""
+  local captured_slide=""
+  local last_result="error:slide-capture-not-attempted"
+
+  for (( attempt=1; attempt<=RESTORE_SLIDE_CAPTURE_RETRY_COUNT; attempt++ )); do
+    if captured_slide="$(capture_live_slide_number_via_screen_ocr)"; then
+      RESTORE_SLIDE_CAPTURE_RESULT="captured:${captured_slide}:source=ocr:attempt=${attempt}"
+      printf '%s\n' "$captured_slide"
+      return 0
+    fi
+
+    if captured_slide="$(capture_live_slide_number_via_hammerspoon)"; then
+      RESTORE_SLIDE_CAPTURE_RESULT="captured:${captured_slide}:attempt=${attempt}"
+      printf '%s\n' "$captured_slide"
+      return 0
+    fi
+
+    last_result="${LAST_CAPTURE_LIVE_SLIDE_RESULT:-error:slide-capture-empty}:attempt=${attempt}"
+    if (( attempt < RESTORE_SLIDE_CAPTURE_RETRY_COUNT )); then
+      sleep "$RESTORE_SLIDE_CAPTURE_RETRY_DELAY_SECONDS"
+    fi
+  done
+
+  RESTORE_SLIDE_CAPTURE_RESULT="$last_result"
+  return 1
+}
+
+trigger_slide_jump_via_hammerspoon() {
   local slide_number="$1"
   local hs_bin=""
   local hs_result=""
@@ -879,6 +1219,77 @@ LUA
 
   printf '%s\n' "$hs_result"
   [[ "$hs_result" == jumped:* ]]
+}
+
+verify_restored_slide_number() {
+  local slide_number="$1"
+  local attempt=""
+  local current_slide=""
+  local last_result="error:restore-verify-not-attempted"
+
+  for (( attempt=1; attempt<=RESTORE_SLIDE_VERIFY_RETRY_COUNT; attempt++ )); do
+    if current_slide="$(capture_live_slide_number_via_screen_ocr)"; then
+      if [[ "$current_slide" == "$slide_number" ]]; then
+        printf 'verified:%s:attempt=%s\n' "$slide_number" "$attempt"
+        return 0
+      fi
+
+      last_result="error:restore-verify-mismatch:last-slide=${current_slide}:attempt=${attempt}"
+    elif current_slide="$(capture_live_slide_number_via_hammerspoon)"; then
+      if [[ "$current_slide" == "$slide_number" ]]; then
+        printf 'verified:%s:attempt=%s\n' "$slide_number" "$attempt"
+        return 0
+      fi
+
+      last_result="error:restore-verify-mismatch:last-slide=${current_slide}:attempt=${attempt}"
+    else
+      last_result="${LAST_CAPTURE_LIVE_SLIDE_RESULT:-error:restore-verify-empty}:attempt=${attempt}"
+    fi
+
+    if (( attempt < RESTORE_SLIDE_VERIFY_RETRY_COUNT )); then
+      sleep "$RESTORE_SLIDE_VERIFY_RETRY_DELAY_SECONDS"
+    fi
+  done
+
+  printf '%s\n' "$last_result"
+  return 1
+}
+
+restore_slide_number_via_hammerspoon() {
+  local slide_number="$1"
+  local attempt=""
+  local jump_result=""
+  local verify_result=""
+  local last_result="error:restore-not-attempted"
+
+  if [[ ! "$slide_number" =~ ^[0-9]+$ ]] || (( slide_number <= 0 )); then
+    printf 'error:invalid-slide-number\n'
+    return 1
+  fi
+
+  for (( attempt=1; attempt<=RESTORE_SLIDE_JUMP_RETRY_COUNT; attempt++ )); do
+    jump_result="$(trigger_slide_jump_via_hammerspoon "$slide_number" || true)"
+    if [[ "$jump_result" != jumped:* ]]; then
+      last_result="${jump_result:-error:empty-slide-restore-result}:attempt=${attempt}"
+      if (( attempt < RESTORE_SLIDE_JUMP_RETRY_COUNT )); then
+        sleep "$RESTORE_SLIDE_JUMP_RETRY_DELAY_SECONDS"
+      fi
+      continue
+    fi
+
+    if verify_result="$(verify_restored_slide_number "$slide_number")"; then
+      printf '%s\n' "$verify_result"
+      return 0
+    fi
+
+    last_result="${verify_result:-error:restore-verify-empty}:jump-attempt=${attempt}"
+    if (( attempt < RESTORE_SLIDE_JUMP_RETRY_COUNT )); then
+      sleep "$RESTORE_SLIDE_JUMP_RETRY_DELAY_SECONDS"
+    fi
+  done
+
+  printf '%s\n' "$last_result"
+  return 1
 }
 
 click_notes_plus_via_hammerspoon_axpress() {
@@ -1178,10 +1589,26 @@ APPLESCRIPT
 fi
 
 if [[ "$RESTORE_PREVIOUS_SLIDE_ON_REFRESH" == "1" ]]; then
-  RESTORE_SLIDE_NUMBER="$(capture_live_slide_number_via_hammerspoon || true)"
-fi
-if [[ "$RESTORE_SLIDE_NUMBER" =~ ^[0-9]+$ ]] && (( RESTORE_SLIDE_NUMBER > 0 )); then
-  echo "[slides_machine_runner] restore previous slide=$RESTORE_SLIDE_NUMBER"
+  if [[ "$RESTORE_SLIDE_PRESENTATION_OPEN" != "yes" ]] && has_live_presentation_window_via_hammerspoon; then
+    RESTORE_SLIDE_PRESENTATION_OPEN="yes"
+  fi
+
+  if [[ "$RESTORE_SLIDE_PRESENTATION_OPEN" == "yes" ]]; then
+    if RESTORE_SLIDE_NUMBER="$(capture_live_slide_number_with_retries)"; then
+      echo "[slides_machine_runner] restore previous slide=$RESTORE_SLIDE_NUMBER"
+    elif [[ "$RESTORE_SLIDE_REQUIRE_CAPTURE_WHEN_PRESENTING" == "1" ]]; then
+      echo "[slides_machine_runner] ERROR: Unable to capture current slide from live presentation (${RESTORE_SLIDE_CAPTURE_RESULT}); refusing refresh to avoid losing slide position." >&2
+      exit 1
+    fi
+  else
+    if [[ "$LAST_PRESENTER_WINDOW_CHECK_RESULT" == "absent" || -z "$LAST_PRESENTER_WINDOW_CHECK_RESULT" ]]; then
+      RESTORE_SLIDE_PRESENTATION_OPEN="no"
+      RESTORE_SLIDE_CAPTURE_RESULT="skipped:no-live-presentation"
+    else
+      RESTORE_SLIDE_PRESENTATION_OPEN="unknown"
+      RESTORE_SLIDE_CAPTURE_RESULT="${LAST_PRESENTER_WINDOW_CHECK_RESULT:-error:presenter-window-check-empty}"
+    fi
+  fi
 fi
 
 ensure_chrome_force_renderer_accessibility
@@ -2009,11 +2436,23 @@ if (( should_try_axpress == 1 )); then
 fi
 
 if [[ "$RESTORE_SLIDE_NUMBER" =~ ^[0-9]+$ ]] && (( RESTORE_SLIDE_NUMBER > 0 )); then
-  RESTORE_SLIDE_RESULT="$(restore_slide_number_via_hammerspoon "$RESTORE_SLIDE_NUMBER" || true)"
+  if ! RESTORE_SLIDE_RESULT="$(restore_slide_number_via_hammerspoon "$RESTORE_SLIDE_NUMBER")"; then
+    echo "[slides_machine_runner] ERROR: Unable to restore previous slide ($RESTORE_SLIDE_RESULT)." >&2
+    exit 1
+  fi
+  sleep 0.2
+elif [[ -n "$RESTORE_PRESENT_SLIDE_ID" ]]; then
+  if ! RESTORE_SLIDE_RESULT="$(verify_live_present_slide_id "$RESTORE_PRESENT_SLIDE_ID")"; then
+    echo "[slides_machine_runner] ERROR: Relaunched deck did not return to the original slide token ($RESTORE_SLIDE_RESULT)." >&2
+    exit 1
+  fi
   sleep 0.2
 fi
 
 echo "[slides_machine_runner] RESTORE_PREVIOUS_SLIDE_ON_REFRESH=$RESTORE_PREVIOUS_SLIDE_ON_REFRESH"
+echo "[slides_machine_runner] RESTORE_SLIDE_PRESENTATION_OPEN=$RESTORE_SLIDE_PRESENTATION_OPEN"
+echo "[slides_machine_runner] RESTORE_SLIDE_CAPTURE_RESULT=$RESTORE_SLIDE_CAPTURE_RESULT"
+echo "[slides_machine_runner] RESTORE_PRESENT_SLIDE_ID=${RESTORE_PRESENT_SLIDE_ID:-none}"
 echo "[slides_machine_runner] RESTORE_SLIDE_NUMBER=${RESTORE_SLIDE_NUMBER:-none}"
 echo "[slides_machine_runner] RESTORE_SLIDE_RESULT=$RESTORE_SLIDE_RESULT"
 
