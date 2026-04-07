@@ -291,6 +291,15 @@ extract_slide_param_from_url() {
   return 1
 }
 
+is_audience_present_url() {
+  local input_url="$1"
+
+  [[ "$input_url" =~ ^https?:// ]] || return 1
+  [[ "$input_url" =~ /presentation/d/[^/?#]+/present([/?#]|$) ]] || return 1
+  [[ "$input_url" != *"presenter=true"* ]] || return 1
+  [[ "$input_url" != *"/presenter"* ]] || return 1
+}
+
 capture_live_present_url() {
   local present_url=""
 
@@ -314,7 +323,7 @@ using terms from application "Google Chrome"
         set oneURL to URL of active tab of window i
       end try
 
-      if oneURL contains "/presentation/d/" and oneURL contains "/present" and oneTitle does not contain "Presenter view" then
+      if oneURL contains "/presentation/d/" and (oneURL contains "/present?" or oneURL contains "/present#" or oneURL contains "/present/" or oneURL ends with "/present") and oneURL does not contain "presenter=true" and oneURL does not contain "/presenter" and oneTitle does not contain "Presenter view" then
         return oneURL
       end if
     end repeat
@@ -325,7 +334,7 @@ using terms from application "Google Chrome"
         set oneURL to URL of active tab of window i
       end try
 
-      if oneURL contains "/presentation/d/" and oneURL contains "/present" then
+      if oneURL contains "/presentation/d/" and (oneURL contains "/present?" or oneURL contains "/present#" or oneURL contains "/present/" or oneURL ends with "/present") and oneURL does not contain "presenter=true" and oneURL does not contain "/presenter" then
         return oneURL
       end if
     end repeat
@@ -336,12 +345,33 @@ APPLESCRIPT
 
   present_url="$(printf '%s' "$present_url" | tr -d '\r\n')"
 
-  if [[ "$present_url" =~ ^https?:// && "$present_url" == *"/presentation/d/"* && "$present_url" == *"/present"* ]]; then
+  if is_audience_present_url "$present_url"; then
     printf '%s\n' "$present_url"
     return 0
   fi
 
   return 1
+}
+
+wait_for_live_present_url() {
+  local max_wait_seconds="${1:-6}"
+  local started_at
+  local present_url=""
+
+  started_at="$(date +%s)"
+  while true; do
+    present_url="$(capture_live_present_url || true)"
+    if [[ -n "$present_url" ]]; then
+      printf '%s\n' "$present_url"
+      return 0
+    fi
+
+    if (( "$(date +%s)" - started_at >= max_wait_seconds )); then
+      return 1
+    fi
+
+    sleep 0.25
+  done
 }
 
 verify_live_present_slide_id() {
@@ -698,6 +728,10 @@ if [[ "$CACHE_BUST" == "1" ]]; then
   fi
 fi
 
+echo "[slides_machine_runner] source url=$SLIDES_SOURCE_URL"
+echo "[slides_machine_runner] present url=$SLIDES_PRESENT_URL"
+echo "[slides_machine_runner] launch url=$SLIDES_LAUNCH_URL"
+
 resolve_runtime_bounds
 echo "[slides_machine_runner] bounds source=$BOUNDS_SOURCE displays=$DISPLAY_COUNT slides=$PRIMARY_BOUNDS notes=$NOTES_BOUNDS"
 
@@ -733,7 +767,16 @@ set targetUrl to system attribute "CHROME_TARGET_URL"
 using terms from application "Google Chrome"
   tell application chromeApp
     activate
-    if (count of windows) is greater than 0 then
+    set openInNewWindow to false
+    if targetUrl contains "/presentation/d/" and (targetUrl contains "/present?" or targetUrl contains "/present#" or targetUrl contains "/present/" or targetUrl ends with "/present") and targetUrl does not contain "/presenter" and targetUrl does not contain "presenter=true" then
+      set openInNewWindow to true
+    end if
+
+    if openInNewWindow then
+      set newWindow to make new window
+      set URL of active tab of newWindow to targetUrl
+      set index of newWindow to 1
+    else if (count of windows) is greater than 0 then
       tell front window
         set newTab to make new tab with properties {URL:targetUrl}
         set active tab index to (count of tabs)
@@ -1499,7 +1542,11 @@ using terms from application "Google Chrome"
         set oneURL to URL of active tab of window i
       end try
 
-      if oneURL contains "/presentation/d/" and oneURL contains "/present" then
+      if oneURL contains "/presentation/d/" and (oneURL contains "/present?" or oneURL contains "/present#" or oneURL contains "/present/" or oneURL ends with "/present") then
+        set shouldClose to true
+      end if
+
+      if oneURL contains "presenter=true" or oneURL contains "/presenter" then
         set shouldClose to true
       end if
 
@@ -1664,6 +1711,16 @@ fi
 open_chrome_window_with_retry "$SLIDES_LAUNCH_URL"
 sleep "$LAUNCH_DELAY_SECONDS"
 
+if [[ "$SLIDES_LAUNCH_URL" =~ /presentation/d/[^/?#]+/present([/?#]|$) ]]; then
+  if ! wait_for_live_present_url 6 >/dev/null; then
+    echo "[slides_machine_runner] WARN: present tab not detected after AppleScript open; retrying with macOS open."
+    open -a "$CHROME_APP" "$SLIDES_LAUNCH_URL"
+    if ! wait_for_live_present_url 8 >/dev/null; then
+      echo "[slides_machine_runner] WARN: present tab still not detected; continuing so downstream notes wait can report details."
+    fi
+  fi
+fi
+
 if [[ -n "$SLIDES_NOTES_URL" ]]; then
   open_chrome_window_with_retry "$SLIDES_NOTES_URL"
   sleep "$LAUNCH_DELAY_SECONDS"
@@ -1808,12 +1865,71 @@ on waitForNotesChromeWindow(chromeAppName, timeoutSeconds)
   end repeat
 end waitForNotesChromeWindow
 
+on isAudiencePresentationTab(oneTitle, oneURL)
+  if oneTitle contains "Presenter view" then return false
+  if oneURL does not contain "/presentation/d/" then return false
+  if not (oneURL contains "/present?" or oneURL contains "/present#" or oneURL contains "/present/" or oneURL ends with "/present") then return false
+  if oneURL contains "presenter=true" then return false
+  if oneURL contains "/presenter" then return false
+  return true
+end isAudiencePresentationTab
+
 on isNotesChromeWindow(oneTitle, oneURL)
   if oneTitle contains "Presenter view" then return true
-  if oneURL contains "presenter=true" then return true
-  if oneURL contains "/presenter" then return true
   return false
 end isNotesChromeWindow
+
+on focusAudiencePresentationChromeWindow(processName, chromeAppName)
+  set foundWindowIndex to missing value
+  set foundTabIndex to missing value
+
+  using terms from application "Google Chrome"
+    tell application chromeAppName
+      set chromeWindowCount to count of windows
+
+      repeat with i from 1 to chromeWindowCount
+        set tabCount to count of tabs of window i
+
+        repeat with tabIndex from 1 to tabCount
+          set oneTitle to ""
+          set oneURL to ""
+
+          try
+            set oneTitle to title of tab tabIndex of window i
+          end try
+
+          try
+            set oneURL to URL of tab tabIndex of window i
+          end try
+
+          if my isAudiencePresentationTab(oneTitle, oneURL) then
+            set foundWindowIndex to i
+            set foundTabIndex to tabIndex
+            exit repeat
+          end if
+        end repeat
+
+        if foundWindowIndex is not missing value then exit repeat
+      end repeat
+
+      if foundWindowIndex is missing value then return false
+
+      set active tab index of window foundWindowIndex to foundTabIndex
+      set index of window foundWindowIndex to 1
+      activate
+    end tell
+  end using terms from
+
+  delay 0.2
+
+  tell application "System Events"
+    tell process processName
+      set frontmost to true
+    end tell
+  end tell
+
+  return true
+end focusAudiencePresentationChromeWindow
 
 on triggerNotesShortcutWithRetries(processName, chromeAppName, maxWaitSeconds, retryIntervalSeconds)
   set startedAt to current date
@@ -1821,13 +1937,16 @@ on triggerNotesShortcutWithRetries(processName, chromeAppName, maxWaitSeconds, r
   repeat
     if my hasNotesChromeWindow(chromeAppName) then return true
 
-    my clickFrontWindowCenter(processName)
-    tell application "System Events"
-      tell process processName
-        set frontmost to true
-        keystroke "s"
+    if my focusAudiencePresentationChromeWindow(processName, chromeAppName) then
+      my clickFrontWindowCenter(processName)
+      delay 0.3
+      tell application "System Events"
+        tell process processName
+          set frontmost to true
+          keystroke "s"
+        end tell
       end tell
-    end tell
+    end if
 
     delay retryIntervalSeconds
 
@@ -2138,21 +2257,24 @@ end if
 
 my waitForProcess(chromeApp, waitTimeout)
 my waitForWindowCount(chromeApp, 1, waitTimeout)
+my focusAudiencePresentationChromeWindow(chromeApp, chromeApp)
 
 my waitForProcess(chromeApp, waitTimeout)
 tell application "System Events"
   tell process chromeApp
     set frontmost to true
     set slidesWindow to window 1
-    my clickWindowCenter(chromeApp, slidesWindow)
 
     if launchFromEditMode is "1" then
+      my clickWindowCenter(chromeApp, slidesWindow)
       keystroke return using {command down}
       delay launchDelay
-      my clickWindowCenter(chromeApp, slidesWindow)
+      my focusAudiencePresentationChromeWindow(chromeApp, chromeApp)
     end if
 
     if notesViaShortcut is "1" then
+      my focusAudiencePresentationChromeWindow(chromeApp, chromeApp)
+      delay presenterReadyDelay
       set shortcutOpened to my triggerNotesShortcutWithRetries(chromeApp, chromeApp, notesShortcutMaxWait, notesShortcutRetryInterval)
       if shortcutOpened then
         set notesWindowWaitResult to "shortcut-opened"
@@ -2214,7 +2336,7 @@ using terms from application "Google Chrome"
         set notesChromeId to oneWindowId
       end if
 
-      if slidesChromeIndex is missing value and oneURL contains "/presentation/d/" and oneURL contains "/present" then
+      if slidesChromeIndex is missing value and my isAudiencePresentationTab(oneTitle, oneURL) then
         set slidesChromeIndex to i
         set slidesChromeId to oneWindowId
       end if
