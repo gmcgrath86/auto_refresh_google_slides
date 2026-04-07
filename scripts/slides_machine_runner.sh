@@ -132,6 +132,7 @@ RESTORE_SLIDE_NUMBER=""
 RESTORE_SLIDE_RESULT="skipped"
 RESTORE_SLIDE_CAPTURE_RESULT="not-attempted"
 RESTORE_SLIDE_PRESENTATION_OPEN="unknown"
+RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY=0
 LAST_CAPTURE_LIVE_SLIDE_RESULT=""
 LAST_PRESENTER_WINDOW_CHECK_RESULT=""
 
@@ -1351,15 +1352,14 @@ targetWindow:focus()
 hs.timer.usleep(180000)
 
 local root = ax.windowElement(targetWindow)
-if not root then
-  print("error:presenter-ax-root-not-found")
-  return
-end
 
-local queue = {root}
+local queue = {}
 local zoomInButton = nil
 local speakerNotesTab = nil
 local safetyCounter = 0
+if root then
+  table.insert(queue, root)
+end
 
 while #queue > 0 and safetyCounter < 4000 do
   safetyCounter = safetyCounter + 1
@@ -1397,7 +1397,25 @@ if speakerNotesTab then
 end
 
 if not zoomInButton then
-  print("error:zoom-in-button-not-found")
+  local frame = targetWindow:frame()
+  if not frame or frame.w <= 0 then
+    print("error:presenter-frame-not-found")
+    return
+  end
+
+  local centerX = math.floor(frame.x + frame.w - 17 + 0.5)
+  local centerY = math.floor(frame.y + (frame.h * 0.074) + 0.5)
+  local originalMouse = hs.mouse.absolutePosition()
+
+  for i = 1, steps do
+    hs.eventtap.leftClick({x = centerX, y = centerY})
+    if clickDelaySeconds > 0 then
+      hs.timer.usleep(math.floor(clickDelaySeconds * 1000000))
+    end
+  end
+
+  hs.mouse.absolutePosition(originalMouse)
+  print(string.format("clicked:%d:x=%d:y=%d:source=coords-fallback", steps, centerX, centerY))
   return
 end
 
@@ -1589,14 +1607,17 @@ APPLESCRIPT
 fi
 
 if [[ "$RESTORE_PREVIOUS_SLIDE_ON_REFRESH" == "1" ]]; then
-  if [[ "$RESTORE_SLIDE_PRESENTATION_OPEN" != "yes" ]] && has_live_presentation_window_via_hammerspoon; then
+  if has_live_presentation_window_via_hammerspoon; then
     RESTORE_SLIDE_PRESENTATION_OPEN="yes"
+    RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY=1
+  elif [[ "$RESTORE_SLIDE_PRESENTATION_OPEN" == "yes" ]]; then
+    RESTORE_SLIDE_PRESENTATION_OPEN="url-only"
   fi
 
   if [[ "$RESTORE_SLIDE_PRESENTATION_OPEN" == "yes" ]]; then
     if RESTORE_SLIDE_NUMBER="$(capture_live_slide_number_with_retries)"; then
       echo "[slides_machine_runner] restore previous slide=$RESTORE_SLIDE_NUMBER"
-    elif [[ "$RESTORE_SLIDE_REQUIRE_CAPTURE_WHEN_PRESENTING" == "1" ]]; then
+    elif [[ "$RESTORE_SLIDE_REQUIRE_CAPTURE_WHEN_PRESENTING" == "1" && -z "$RESTORE_PRESENT_SLIDE_ID" ]]; then
       echo "[slides_machine_runner] ERROR: Unable to capture current slide from live presentation (${RESTORE_SLIDE_CAPTURE_RESULT}); refusing refresh to avoid losing slide position." >&2
       exit 1
     fi
@@ -2441,18 +2462,21 @@ if [[ "$RESTORE_SLIDE_NUMBER" =~ ^[0-9]+$ ]] && (( RESTORE_SLIDE_NUMBER > 0 )); 
     exit 1
   fi
   sleep 0.2
-elif [[ -n "$RESTORE_PRESENT_SLIDE_ID" ]]; then
+elif [[ -n "$RESTORE_PRESENT_SLIDE_ID" && "$RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY" == "1" ]]; then
   if ! RESTORE_SLIDE_RESULT="$(verify_live_present_slide_id "$RESTORE_PRESENT_SLIDE_ID")"; then
     echo "[slides_machine_runner] ERROR: Relaunched deck did not return to the original slide token ($RESTORE_SLIDE_RESULT)." >&2
     exit 1
   fi
   sleep 0.2
+elif [[ -n "$RESTORE_PRESENT_SLIDE_ID" ]]; then
+  RESTORE_SLIDE_RESULT="skipped-url-token-verify:no-live-presenter-window"
 fi
 
 echo "[slides_machine_runner] RESTORE_PREVIOUS_SLIDE_ON_REFRESH=$RESTORE_PREVIOUS_SLIDE_ON_REFRESH"
 echo "[slides_machine_runner] RESTORE_SLIDE_PRESENTATION_OPEN=$RESTORE_SLIDE_PRESENTATION_OPEN"
 echo "[slides_machine_runner] RESTORE_SLIDE_CAPTURE_RESULT=$RESTORE_SLIDE_CAPTURE_RESULT"
 echo "[slides_machine_runner] RESTORE_PRESENT_SLIDE_ID=${RESTORE_PRESENT_SLIDE_ID:-none}"
+echo "[slides_machine_runner] RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY=$RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY"
 echo "[slides_machine_runner] RESTORE_SLIDE_NUMBER=${RESTORE_SLIDE_NUMBER:-none}"
 echo "[slides_machine_runner] RESTORE_SLIDE_RESULT=$RESTORE_SLIDE_RESULT"
 

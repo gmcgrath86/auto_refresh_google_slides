@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  bootstrap_machine.sh [--role presentation|relay-agent|controller|all] [--install-hotkey]
+  bootstrap_machine.sh [--role presentation|relay-agent|controller|all] [--install-hotkey] [--install-launch-agent]
 
 Roles:
   presentation  Create config/local.env if missing and prep local runner.
@@ -18,15 +18,19 @@ Hotkey options:
   --hotkey-config PATH      Config file path for selected mode (default based on mode)
   --hotkey-mods CSV         Hotkey modifiers (default: ctrl,alt,cmd)
   --hotkey-key KEY          Hotkey key (default: r)
+  --http-interface IFACE    Hammerspoon HTTP bind interface (default: en0)
+  --install-launch-agent    Auto-start/restart Hammerspoon after GUI login.
 USAGE
 }
 
 ROLE="all"
 INSTALL_HOTKEY=0
+INSTALL_LAUNCH_AGENT=0
 HOTKEY_MODE="local"
 HOTKEY_CONFIG=""
 HOTKEY_MODS_CSV="ctrl,alt,cmd"
 HOTKEY_KEY="r"
+HTTP_INTERFACE="en0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,6 +40,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --install-hotkey)
       INSTALL_HOTKEY=1
+      shift 1
+      ;;
+    --install-launch-agent)
+      INSTALL_LAUNCH_AGENT=1
       shift 1
       ;;
     --hotkey-mode)
@@ -52,6 +60,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hotkey-key)
       HOTKEY_KEY="${2:-}"
+      shift 2
+      ;;
+    --http-interface)
+      HTTP_INTERFACE="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -76,6 +88,24 @@ lua_escape() {
   input="${input//\\/\\\\}"
   input="${input//\"/\\\"}"
   printf '%s' "$input"
+}
+
+ensure_hammerspoon_installed() {
+  if [[ -d /Applications/Hammerspoon.app ]]; then
+    return 0
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "Hammerspoon is not installed and Homebrew was not found." >&2
+    echo "Install one of the following, then rerun the bootstrap command:" >&2
+    echo "  1) Homebrew path (recommended): brew install --cask hammerspoon" >&2
+    echo "  2) Manual path: download latest .dmg from https://github.com/Hammerspoon/hammerspoon/releases/latest" >&2
+    echo "     and drag Hammerspoon.app into /Applications" >&2
+    exit 1
+  fi
+
+  echo "Installing Hammerspoon..."
+  brew install --cask hammerspoon
 }
 
 setup_hammerspoon_hotkey() {
@@ -108,19 +138,7 @@ setup_hammerspoon_hotkey() {
     hotkey_config_path="$HOTKEY_CONFIG"
   fi
 
-  if [[ ! -d /Applications/Hammerspoon.app ]]; then
-    if ! command -v brew >/dev/null 2>&1; then
-      echo "Hammerspoon is not installed and Homebrew was not found." >&2
-      echo "Install one of the following, then rerun with --install-hotkey:" >&2
-      echo "  1) Homebrew path (recommended): brew install --cask hammerspoon" >&2
-      echo "  2) Manual path: download latest .dmg from https://github.com/Hammerspoon/hammerspoon/releases/latest" >&2
-      echo "     and drag Hammerspoon.app into /Applications" >&2
-      exit 1
-    fi
-
-    echo "Installing Hammerspoon..."
-    brew install --cask hammerspoon
-  fi
+  ensure_hammerspoon_installed
 
   mkdir -p "$HOME_HAMMERSPOON_DIR"
 
@@ -161,6 +179,7 @@ setup_hammerspoon_hotkey() {
   sed -i '' "s|^local triggerConfig = .*|local triggerConfig = \"$trigger_config_lua\"|" "$hotkey_lua"
   sed -i '' "s|^local hotkeyMods = .*|local hotkeyMods = {$lua_mods}|" "$hotkey_lua"
   sed -i '' "s|^local hotkeyKey = .*|local hotkeyKey = \"$HOTKEY_KEY\"|" "$hotkey_lua"
+  sed -i '' "s|^local httpInterface = .*|local httpInterface = \"$HTTP_INTERFACE\"|" "$hotkey_lua"
 
   init_file="$HOME_HAMMERSPOON_DIR/init.lua"
   local ipc_line
@@ -200,6 +219,7 @@ EOF
   echo "Configured: $HOME_HAMMERSPOON_DIR/slides_hotkey.lua"
   echo "Hotkey: $HOTKEY_MODS_CSV+$HOTKEY_KEY"
   echo "Mode/config: $HOTKEY_MODE -> $hotkey_config_path"
+  echo "HTTP interface: $HTTP_INTERFACE"
   echo "If hotkey still does nothing, enable Accessibility for Hammerspoon:"
   echo "System Settings -> Privacy & Security -> Accessibility -> Hammerspoon"
   echo "Remote trigger endpoint: http://<this-machine-ip>:8765/slides/run"
@@ -208,6 +228,38 @@ EOF
   echo "Remote jump endpoint:    http://<this-machine-ip>:8765/slides/jump/<number>"
   echo "Remote notes endpoint:   http://<this-machine-ip>:8765/slides/notes/font/up/<steps>"
   echo "Remote layout endpoint:  http://<this-machine-ip>:8765/slides/notes/layout/80"
+}
+
+setup_hammerspoon_launch_agent() {
+  local template_plist="$PROJECT_ROOT/launchd/com.codex.slides-hammerspoon.plist.example"
+  local launch_agents_dir="$HOME/Library/LaunchAgents"
+  local launch_agent_plist="$launch_agents_dir/com.codex.slides-hammerspoon.plist"
+  local user_domain="gui/$(id -u)"
+
+  ensure_hammerspoon_installed
+
+  if [[ ! -f "$template_plist" ]]; then
+    echo "Missing template: $template_plist" >&2
+    exit 1
+  fi
+
+  mkdir -p "$launch_agents_dir"
+  cp "$template_plist" "$launch_agent_plist"
+  plutil -lint "$launch_agent_plist" >/dev/null
+
+  launchctl bootout "$user_domain" "$launch_agent_plist" >/dev/null 2>&1 || true
+  launchctl bootstrap "$user_domain" "$launch_agent_plist"
+  launchctl enable "$user_domain/com.codex.slides-hammerspoon"
+
+  # Avoid keeping an old manually-opened Hammerspoon instance alongside launchd.
+  /usr/bin/osascript -e 'quit application "Hammerspoon"' >/dev/null 2>&1 || true
+  sleep 1
+  launchctl kickstart -k "$user_domain/com.codex.slides-hammerspoon"
+
+  echo "Hammerspoon LaunchAgent setup complete."
+  echo "LaunchAgent: $launch_agent_plist"
+  echo "Logs: /tmp/slides-hammerspoon-launchd.out.log"
+  echo "Logs: /tmp/slides-hammerspoon-launchd.err.log"
 }
 
 create_if_missing() {
@@ -252,6 +304,10 @@ esac
 
 if [[ "$INSTALL_HOTKEY" == "1" ]]; then
   setup_hammerspoon_hotkey
+fi
+
+if [[ "$INSTALL_LAUNCH_AGENT" == "1" ]]; then
+  setup_hammerspoon_launch_agent
 fi
 
 echo "Done. Next: edit config files for this machine, then run the matching script from README/DEPLOY.md."

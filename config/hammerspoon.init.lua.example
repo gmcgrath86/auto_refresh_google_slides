@@ -495,15 +495,15 @@ local function adjustNotesFont(direction, steps)
 
   local ax = require("hs.axuielement")
   local root = ax.windowElement(presenterWindow)
-  if not root then
-    return false, "presenter-ax-root-not-found"
-  end
 
   local speakerNotesTab = nil
   local zoomInButton = nil
   local zoomOutButton = nil
-  local queue = {root}
+  local queue = {}
   local safetyCounter = 0
+  if root then
+    table.insert(queue, root)
+  end
 
   while #queue > 0 and safetyCounter < 5000 do
     safetyCounter = safetyCounter + 1
@@ -544,7 +544,22 @@ local function adjustNotesFont(direction, steps)
 
   local targetButton = (direction == "up") and zoomInButton or zoomOutButton
   if not targetButton then
-    return false, direction == "up" and "zoom-in-button-not-found" or "zoom-out-button-not-found"
+    local presenterFrame = presenterWindow:frame()
+    if not presenterFrame or presenterFrame.w <= 0 then
+      return false, "presenter-frame-not-found"
+    end
+
+    local centerX = math.floor(presenterFrame.x + presenterFrame.w - ((direction == "up") and 17 or 55) + 0.5)
+    local centerY = math.floor(presenterFrame.y + (presenterFrame.h * 0.074) + 0.5)
+    local originalMouse = hs.mouse.absolutePosition()
+
+    for _ = 1, stepCount do
+      hs.eventtap.leftClick({x = centerX, y = centerY})
+      hs.timer.usleep(70000)
+    end
+
+    hs.mouse.absolutePosition(originalMouse)
+    return true, string.format("adjusted:%s:%d:x=%d:y=%d:source=coords-fallback", direction, stepCount, centerX, centerY)
   end
 
   local frame = targetButton:attributeValue("AXFrame")
@@ -655,18 +670,11 @@ setNotesPaneLayout = function(notesPercent)
     return false, "presenter-ax-root-not-found"
   end
 
-  local divider = findNotesDivider(presenterWindow, root)
-  if not divider then
-    return false, "notes-divider-not-found"
-  end
-
   local presenterFrame = presenterWindow:frame()
   if not presenterFrame or presenterFrame.w <= 0 then
     return false, "presenter-frame-not-found"
   end
 
-  local startX = math.floor(divider.frame.x + (divider.frame.w / 2) + 0.5)
-  local startY = math.floor(divider.frame.y + (divider.frame.h / 2) + 0.5)
   local previewPercent = 100 - targetNotesPercent
   local targetX = math.floor(presenterFrame.x + (presenterFrame.w * previewPercent / 100) + 0.5)
 
@@ -674,6 +682,20 @@ setNotesPaneLayout = function(notesPercent)
   local maximumX = math.floor(presenterFrame.x + (presenterFrame.w * 0.90) + 0.5)
   if targetX < minimumX then targetX = minimumX end
   if targetX > maximumX then targetX = maximumX end
+
+  local divider = findNotesDivider(presenterWindow, root)
+  local source = "ax"
+  local startX = nil
+  local startY = nil
+  if divider then
+    startX = math.floor(divider.frame.x + (divider.frame.w / 2) + 0.5)
+    startY = math.floor(divider.frame.y + (divider.frame.h / 2) + 0.5)
+  else
+    -- Chrome sometimes hides the web contents from AX; the divider is still draggable.
+    source = "coords-fallback"
+    startX = math.floor(presenterFrame.x + (presenterFrame.w * 0.50) + 0.5)
+    startY = math.floor(presenterFrame.y + (presenterFrame.h * 0.50) + 0.5)
+  end
 
   local originalMouse = hs.mouse.absolutePosition()
   hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDown, {x = startX, y = startY}):post()
@@ -697,12 +719,13 @@ setNotesPaneLayout = function(notesPercent)
   end
 
   return true, string.format(
-    "layout:notes=%d:preview=%d:from=%d:to=%d:actualNotes=%d",
+    "layout:notes=%d:preview=%d:from=%d:to=%d:actualNotes=%d:source=%s",
     targetNotesPercent,
     100 - targetNotesPercent,
     startX,
     targetX,
-    actualNotesPercent
+    actualNotesPercent,
+    source
   )
 end
 

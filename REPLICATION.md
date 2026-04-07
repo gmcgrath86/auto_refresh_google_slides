@@ -25,8 +25,11 @@ fi
 "$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" \
   --role presentation \
   --install-hotkey \
+  --install-launch-agent \
   --hotkey-mode local
 ```
+
+Use `--http-interface en18` as well when the remote HTTP listener should bind to wired Ethernet instead of Wi-Fi.
 
 If Homebrew is unavailable, install Hammerspoon manually:
 - https://github.com/Hammerspoon/hammerspoon/releases/latest
@@ -88,4 +91,4 @@ tail -n 100 /tmp/slides-hotkey.log
 
 Look for:
 - `NOTES_METHOD_USED=ax`
-- `NOTES_CLICK_DETAIL=clicked:...:source=axpress`
+- `NOTES_CLICK_DETAIL=clicked:...:source=axpress` or `source=coords-fallback`

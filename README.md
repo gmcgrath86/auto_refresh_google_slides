@@ -11,8 +11,8 @@ Quick deployment:
 - See `DEPLOY.md` for machine-by-machine rollout steps.
 - See `REPLICATION.md` for a Codex-to-Codex handoff runbook on a fresh machine.
 - Bootstrap any machine with `./scripts/bootstrap_machine.sh --role <presentation|relay-agent|controller>`.
-- Fresh machine with hotkey in one command:
-  - `./scripts/bootstrap_machine.sh --role presentation --install-hotkey`
+- Fresh machine with hotkey + auto-restart in one command:
+  - `./scripts/bootstrap_machine.sh --role presentation --install-hotkey --install-launch-agent`
 - Remote operator one-shot setup (recommended on managed laptops):
   - `./scripts/one_shot_remote_setup.sh`
 
@@ -41,7 +41,7 @@ Run these exact commands on a new presentation machine:
 
 ```bash
 git clone https://github.com/gmcgrath86/auto_refresh_google_slides.git "$HOME/auto_refresh_google_slides"
-"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local
 ```
 
 One-paste robust command (works whether repo is already present or not):
@@ -57,7 +57,7 @@ else
   git clone "$REPO_URL" "$REPO_DIR"
 fi
 
-"$REPO_DIR/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+"$REPO_DIR/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local
 
 FILE="$REPO_DIR/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
@@ -111,6 +111,7 @@ One Stream Deck button can:
 - `config/hammerspoon.init.lua.example`: Global-hotkey example config for Hammerspoon.
 - `relay/google_apps_script_webhook.gs`: Google Apps Script webhook relay source.
 - `launchd/com.codex.slides-relay-agent.plist.example`: LaunchAgent template for auto-starting relay agent.
+- `launchd/com.codex.slides-hammerspoon.plist.example`: LaunchAgent template for auto-starting/restarting Hammerspoon HTTP control.
 - `DEPLOY.md`: Practical deployment playbook for presentation laptops and controller machine.
 
 ## Prerequisites
@@ -283,6 +284,16 @@ If you want a keyboard hotkey that works even when Chrome is fullscreen:
 ./scripts/bootstrap_machine.sh --role presentation --install-hotkey
 ```
 
+To also auto-start/restart Hammerspoon after GUI login:
+```bash
+./scripts/bootstrap_machine.sh --role presentation --install-hotkey --install-launch-agent
+```
+
+If the remote HTTP listener should bind to wired Ethernet instead of Wi-Fi, pass the interface name:
+```bash
+./scripts/bootstrap_machine.sh --role presentation --install-hotkey --install-launch-agent --http-interface en18
+```
+
 2. Use the wrapper script:
 ```bash
 ./scripts/slides_hotkey_trigger.sh --mode local --config ./config/local.env
@@ -319,7 +330,7 @@ Notes:
 - Logs are written to `/tmp/slides-hotkey.log`.
 
 ## Remote HTTP trigger (same VLAN)
-When hotkey setup is installed via `bootstrap_machine.sh --install-hotkey`, Hammerspoon also starts an HTTP API on `en0:8765`.
+When hotkey setup is installed via `bootstrap_machine.sh --install-hotkey`, Hammerspoon also starts an HTTP API on `<http-interface>:8765` (`en0` by default; override with `--http-interface en18` or the interface for that machine).
 The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run`.
 
 Commands from another machine on the same network:
@@ -356,6 +367,21 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
 
 `/slides/run` now returns `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.
+
+### Optional: keep HTTP control alive after reboot
+Install the Hammerspoon LaunchAgent on presentation machines:
+```bash
+./scripts/bootstrap_machine.sh --role presentation --install-hotkey --install-launch-agent
+```
+
+This loads `~/Library/LaunchAgents/com.codex.slides-hammerspoon.plist` with `RunAtLoad` and `KeepAlive`.
+It starts after the macOS user logs into the GUI session; Hammerspoon still requires Accessibility permission.
+
+Check it:
+```bash
+launchctl print gui/$(id -u)/com.codex.slides-hammerspoon
+curl "http://<slides-machine-ip>:8765/slides/health"
+```
 
 ## Deck behavior
 With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any Google Slides deck:

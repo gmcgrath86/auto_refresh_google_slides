@@ -27,7 +27,7 @@ else
   git clone "$REPO_URL" "$REPO_DIR"
 fi
 
-"$REPO_DIR/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+"$REPO_DIR/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local
 
 FILE="$REPO_DIR/config/local.env"
 grep -q '^SLIDES_SOURCE_URL=' "$FILE" && sed -i '' 's|^SLIDES_SOURCE_URL=.*|SLIDES_SOURCE_URL=""|' "$FILE" || echo 'SLIDES_SOURCE_URL=""' >> "$FILE"
@@ -70,7 +70,7 @@ That creates machine-local config files if missing and makes scripts executable.
 
 To also install and wire the global hotkey in one shot:
 ```bash
-"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local
 ```
 
 ## 3) Configure this machine
@@ -135,7 +135,12 @@ Expected result:
 ## 6) Hotkey setup (optional)
 Recommended:
 ```bash
-"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --hotkey-mode local
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local
+```
+
+If the HTTP listener should bind to a wired interface, add that interface name:
+```bash
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local --http-interface en18
 ```
 
 Manual alternative:
@@ -170,6 +175,8 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
 The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run`.
 `/slides/run` returns `202 Accepted` with a `runId` and `statusPath`; poll `/slides/status/<runId>` for final success or failure.
+
+The `--install-launch-agent` flag installs `~/Library/LaunchAgents/com.codex.slides-hammerspoon.plist` so Hammerspoon restarts after GUI login and relaunches if it exits. It does not run before macOS user login.
 
 ## 7) Two-machine trigger options
 
