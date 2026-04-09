@@ -133,6 +133,8 @@ RESTORE_PRESENT_SLIDE_ID=""
 RESTORE_SLIDE_NUMBER=""
 RESTORE_SLIDE_RESULT="skipped"
 FORCE_SLIDE_RESULT="skipped"
+RESTORE_SLIDE_PRE_NOTES_RESULT="skipped"
+RESTORE_SLIDE_TOKEN_PRE_NOTES_DONE=0
 RESTORE_SLIDE_CAPTURE_RESULT="not-attempted"
 RESTORE_SLIDE_PRESENTATION_OPEN="unknown"
 RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY=0
@@ -431,6 +433,40 @@ wait_for_live_present_slide_id() {
   done
 }
 
+wait_for_live_present_slide_id_stable() {
+  local expected_slide_id="$1"
+  local max_wait_seconds="${2:-6}"
+  local required_confirmations="${3:-4}"
+  local started_at
+  local verify_result=""
+  local consecutive_confirmations=0
+
+  if [[ ! "$required_confirmations" =~ ^[0-9]+$ ]] || (( required_confirmations < 1 )); then
+    required_confirmations=1
+  fi
+
+  started_at="$(date +%s)"
+  while true; do
+    verify_result="$(verify_live_present_slide_id "$expected_slide_id" || true)"
+    if [[ "$verify_result" == verified-url:* ]]; then
+      consecutive_confirmations=$((consecutive_confirmations + 1))
+      if (( consecutive_confirmations >= required_confirmations )); then
+        printf '%s\n' "$verify_result"
+        return 0
+      fi
+    else
+      consecutive_confirmations=0
+    fi
+
+    if (( "$(date +%s)" - started_at >= max_wait_seconds )); then
+      printf '%s\n' "$verify_result"
+      return 1
+    fi
+
+    sleep 0.35
+  done
+}
+
 replace_live_present_url() {
   local target_url="$1"
 
@@ -485,18 +521,18 @@ restore_present_slide_token() {
     return 1
   fi
 
-  verify_result="$(wait_for_live_present_slide_id "$expected_slide_id" 3 || true)"
+  verify_result="$(wait_for_live_present_slide_id_stable "$expected_slide_id" 5 4 || true)"
   if [[ "$verify_result" == verified-url:* ]]; then
-    printf '%s\n' "$verify_result"
+    printf 'stable-%s\n' "$verify_result"
     return 0
   fi
 
-  echo "[slides_machine_runner] WARN: audience slide token mismatch after relaunch ($verify_result); restoring captured present URL."
+  echo "[slides_machine_runner] WARN: audience slide token mismatch ($verify_result); restoring captured present URL."
   replace_live_present_url "$target_url" || true
 
-  verify_result="$(wait_for_live_present_slide_id "$expected_slide_id" 8 || true)"
+  verify_result="$(wait_for_live_present_slide_id_stable "$expected_slide_id" 8 4 || true)"
   if [[ "$verify_result" == verified-url:* ]]; then
-    printf 'restored-%s\n' "$verify_result"
+    printf 'restored-stable-%s\n' "$verify_result"
     return 0
   fi
 
@@ -1823,6 +1859,15 @@ if [[ "$SLIDES_LAUNCH_URL" =~ /presentation/d/[^/?#]+/present([/?#]|$) ]]; then
   fi
 fi
 
+if [[ -n "$RESTORE_PRESENT_SLIDE_ID" && "$RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY" == "1" ]]; then
+  if ! RESTORE_SLIDE_PRE_NOTES_RESULT="$(restore_present_slide_token "$RESTORE_PRESENT_SLIDE_ID" "$SLIDES_LAUNCH_URL")"; then
+    echo "[slides_machine_runner] ERROR: Relaunched deck did not settle on the original slide token before opening notes ($RESTORE_SLIDE_PRE_NOTES_RESULT)." >&2
+    exit 1
+  fi
+  RESTORE_SLIDE_TOKEN_PRE_NOTES_DONE=1
+  RESTORE_SLIDE_RESULT="$RESTORE_SLIDE_PRE_NOTES_RESULT"
+fi
+
 if [[ -n "$SLIDES_NOTES_URL" ]]; then
   open_chrome_window_with_retry "$SLIDES_NOTES_URL"
   sleep "$LAUNCH_DELAY_SECONDS"
@@ -2681,9 +2726,16 @@ if (( should_try_axpress == 1 )); then
 fi
 
 if [[ -n "$RESTORE_PRESENT_SLIDE_ID" && "$RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY" == "1" ]]; then
-  if ! RESTORE_SLIDE_RESULT="$(restore_present_slide_token "$RESTORE_PRESENT_SLIDE_ID" "$SLIDES_LAUNCH_URL")"; then
-    echo "[slides_machine_runner] ERROR: Relaunched deck did not return to the original slide token ($RESTORE_SLIDE_RESULT)." >&2
-    exit 1
+  if (( RESTORE_SLIDE_TOKEN_PRE_NOTES_DONE == 1 )); then
+    # Presenter View can rewrite the audience URL to a live-session token.
+    # Enforcing the launch token after notes are open reloads the audience tab and
+    # can close Presenter View, so the strict repair happens only before notes.
+    RESTORE_SLIDE_RESULT="${RESTORE_SLIDE_PRE_NOTES_RESULT};post-notes-url-check-skipped"
+  else
+    if ! RESTORE_SLIDE_RESULT="$(restore_present_slide_token "$RESTORE_PRESENT_SLIDE_ID" "$SLIDES_LAUNCH_URL")"; then
+      echo "[slides_machine_runner] ERROR: Relaunched deck did not return to the original slide token ($RESTORE_SLIDE_RESULT)." >&2
+      exit 1
+    fi
   fi
   sleep 0.2
 elif [[ "$RESTORE_SLIDE_NUMBER" =~ ^[0-9]+$ ]] && (( RESTORE_SLIDE_NUMBER > 0 )); then
@@ -2710,6 +2762,7 @@ echo "[slides_machine_runner] RESTORE_SLIDE_CAPTURE_RESULT=$RESTORE_SLIDE_CAPTUR
 echo "[slides_machine_runner] RESTORE_PRESENT_SLIDE_ID=${RESTORE_PRESENT_SLIDE_ID:-none}"
 echo "[slides_machine_runner] RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY=$RESTORE_PRESENT_SLIDE_ID_STRICT_VERIFY"
 echo "[slides_machine_runner] RESTORE_SLIDE_NUMBER=${RESTORE_SLIDE_NUMBER:-none}"
+echo "[slides_machine_runner] RESTORE_SLIDE_PRE_NOTES_RESULT=$RESTORE_SLIDE_PRE_NOTES_RESULT"
 echo "[slides_machine_runner] RESTORE_SLIDE_RESULT=$RESTORE_SLIDE_RESULT"
 echo "[slides_machine_runner] FORCE_SLIDE_NUMBER_ON_LAUNCH=${FORCE_SLIDE_NUMBER_ON_LAUNCH:-none}"
 echo "[slides_machine_runner] FORCE_SLIDE_RESULT=$FORCE_SLIDE_RESULT"
