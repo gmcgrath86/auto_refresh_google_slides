@@ -21,6 +21,11 @@ local hotkeyKey = "r"
 local httpInterface = "en0"
 local httpPort = 8765
 local iCloudDriveRoot = os.getenv("HOME") .. "/Library/Mobile Documents/com~apple~CloudDocs"
+local keynoteBundleId = "com.apple.Keynote"
+local keynoteAppPaths = {
+  "/Applications/Keynote.app",
+  "/Applications/Keynote Creator Studio.app",
+}
 -- Automatically bias presenter view toward speaker notes after a successful run.
 -- Set to 0 to disable automatic post-run layout adjustment.
 local defaultNotesLayoutNotesPercent = 80
@@ -580,6 +585,15 @@ local function appleScriptQuoted(value)
   return '"' .. text .. '"'
 end
 
+local function findKeynoteAppPath()
+  for _, appPath in ipairs(keynoteAppPaths) do
+    if hs.fs.attributes(appPath) then
+      return appPath
+    end
+  end
+  return nil
+end
+
 local function openKeynoteDeck(request)
   local attrs = hs.fs.attributes(request.resolvedPath)
   if not attrs then
@@ -601,13 +615,13 @@ local function openKeynoteDeck(request)
   end
 
   local script = string.format([[
-tell application "Keynote"
+tell application id %s
   activate
   open POSIX file %s
   delay 1
 %s%s
 end tell
-]], appleScriptQuoted(request.resolvedPath), slideBlock, presentBlock)
+]], appleScriptQuoted(keynoteBundleId), appleScriptQuoted(request.resolvedPath), slideBlock, presentBlock)
 
   local ok, output, descriptor = hs.osascript.applescript(script)
   if ok then
@@ -907,13 +921,16 @@ local function onHttpRequest(method, path, _, _)
 
   if method == "GET" and path == "/keynote/health" then
     local rootExists = hs.fs.attributes(iCloudDriveRoot) ~= nil
-    local keynoteExists = hs.fs.attributes("/Applications/Keynote.app") ~= nil
+    local keynotePath = findKeynoteAppPath()
+    local keynoteExists = keynotePath ~= nil
     return jsonResponseValue({
       ok = rootExists and keynoteExists,
       service = "slides-trigger",
       keynote = true,
       icloudRoot = iCloudDriveRoot,
       icloudRootExists = rootExists,
+      keynoteBundleId = keynoteBundleId,
+      keynotePath = keynotePath,
       keynoteAvailable = keynoteExists,
     }, 200)
   end
