@@ -165,6 +165,7 @@ Remote HTTP commands (same VLAN):
 curl "http://<slides-machine-ip>:8765/slides/health"
 curl "http://<slides-machine-ip>:8765/slides/run"
 curl "http://<slides-machine-ip>:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
+curl "http://<slides-machine-ip>:8765/keynote/load?title=April%20All%20Hands&icloud_relative_path=Events/April%20All%20Hands.key&mode=present"
 curl "http://<slides-machine-ip>:8765/slides/status"
 curl "http://<slides-machine-ip>:8765/slides/jump/25"
 curl "http://<slides-machine-ip>:8765/slides/jump?slide=25"

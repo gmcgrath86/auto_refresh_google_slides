@@ -345,6 +345,9 @@ curl "http://<slides-machine-ip>:8765/slides/run"
 # load a specific deck, launch it, and reset it to slide 1
 curl "http://<slides-machine-ip>:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
 
+# open an iCloud Keynote deck and start presenter mode
+curl "http://<slides-machine-ip>:8765/keynote/load?title=April%20All%20Hands&icloud_relative_path=Events/April%20All%20Hands.key&mode=present"
+
 # latest refresh status
 curl "http://<slides-machine-ip>:8765/slides/status"
 
@@ -371,6 +374,8 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
 
 `/slides/run` and `/slides/load` return `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.
+
+`/keynote/load` resolves `icloud_relative_path` under this machine's iCloud Drive root (`~/Library/Mobile Documents/com~apple~CloudDocs`), opens the `.key` deck in Keynote, and starts presenter mode when `mode=present`. Keynote control requires Hammerspoon automation/accessibility permissions and a logged-in GUI session.
 
 ### Optional: keep HTTP control alive after reboot
 Install the Hammerspoon LaunchAgent on presentation machines:
