@@ -20,6 +20,7 @@ local hotkeyKey = "r"
 -- HTTP control endpoint (for remote curl triggers on same VLAN)
 local httpInterface = "en0"
 local httpPort = 8765
+local iCloudDriveRoot = os.getenv("HOME") .. "/Library/Mobile Documents/com~apple~CloudDocs"
 -- Automatically bias presenter view toward speaker notes after a successful run.
 -- Set to 0 to disable automatic post-run layout adjustment.
 local defaultNotesLayoutNotesPercent = 80
@@ -371,6 +372,40 @@ local function parseSlidesLoadRequest(path)
   }, nil
 end
 
+local function parseKeynoteLoadRequest(path)
+  local route, query = splitRouteAndQuery(path)
+  if route ~= "/keynote/load" then
+    return nil, nil
+  end
+
+  local values = parseQueryValues(query)
+  local relativePath = values.icloud_relative_path or values.path or ""
+  local title = values.title or ""
+  local mode = values.mode or "present"
+  local slide = parsePositiveInt(values.slide or "1") or 1
+
+  if #relativePath == 0 then
+    return nil, "missing-icloud-relative-path"
+  end
+  if relativePath:sub(1, 1) == "/" or relativePath:find("..", 1, true) then
+    return nil, "invalid-icloud-relative-path"
+  end
+  if not relativePath:match("%.key$") then
+    return nil, "not-a-keynote-deck"
+  end
+  if mode ~= "present" and mode ~= "open" then
+    return nil, "invalid-mode"
+  end
+
+  return {
+    title = title,
+    relativePath = relativePath,
+    mode = mode,
+    slide = slide,
+    resolvedPath = iCloudDriveRoot .. "/" .. relativePath,
+  }, nil
+end
+
 local function parseSlideNumberFromPath(path)
   local route, query = splitRouteAndQuery(path)
 
@@ -536,6 +571,50 @@ local function jumpToSlide(slideNumber)
   hs.timer.usleep(70000)
   hs.eventtap.keyStroke({}, "return")
   return true, "jumped"
+end
+
+local function appleScriptQuoted(value)
+  local text = tostring(value or "")
+  text = text:gsub("\\", "\\\\")
+  text = text:gsub('"', '\\"')
+  return '"' .. text .. '"'
+end
+
+local function openKeynoteDeck(request)
+  local attrs = hs.fs.attributes(request.resolvedPath)
+  if not attrs then
+    return false, "deck-not-found"
+  end
+
+  local slideBlock = ""
+  if request.slide and request.slide > 1 then
+    slideBlock = string.format([[
+  try
+    show slide %d of the front document
+  end try
+]], request.slide)
+  end
+
+  local presentBlock = ""
+  if request.mode == "present" then
+    presentBlock = "  start the front document\n"
+  end
+
+  local script = string.format([[
+tell application "Keynote"
+  activate
+  open POSIX file %s
+  delay 1
+%s%s
+end tell
+]], appleScriptQuoted(request.resolvedPath), slideBlock, presentBlock)
+
+  local ok, output, descriptor = hs.osascript.applescript(script)
+  if ok then
+    return true, output or "opened"
+  end
+
+  return false, tostring(output or descriptor or "keynote-automation-failed")
 end
 
 local function adjustNotesFont(direction, steps)
@@ -826,6 +905,19 @@ local function onHttpRequest(method, path, _, _)
     return jsonResponse('{"ok":true,"service":"slides-trigger"}', 200)
   end
 
+  if method == "GET" and path == "/keynote/health" then
+    local rootExists = hs.fs.attributes(iCloudDriveRoot) ~= nil
+    local keynoteExists = hs.fs.attributes("/Applications/Keynote.app") ~= nil
+    return jsonResponseValue({
+      ok = rootExists and keynoteExists,
+      service = "slides-trigger",
+      keynote = true,
+      icloudRoot = iCloudDriveRoot,
+      icloudRootExists = rootExists,
+      keynoteAvailable = keynoteExists,
+    }, 200)
+  end
+
   local isRefreshStatusRequest, requestedRunId = false, nil
   if method == "GET" then
     isRefreshStatusRequest, requestedRunId = parseRefreshStatusRequest(path)
@@ -892,6 +984,42 @@ local function onHttpRequest(method, path, _, _)
     payload.accepted = false
     payload.error = payload.error or reason or "load-start-failed"
     return jsonResponseValue(payload, 500)
+  end
+
+  local keynoteLoadRequest, keynoteLoadParseError = nil, nil
+  if method == "GET" or method == "POST" then
+    keynoteLoadRequest, keynoteLoadParseError = parseKeynoteLoadRequest(path)
+  end
+
+  if keynoteLoadParseError then
+    return jsonResponseValue({
+      ok = false,
+      error = keynoteLoadParseError,
+    }, 400)
+  end
+
+  if keynoteLoadRequest then
+    local ok, detail = openKeynoteDeck(keynoteLoadRequest)
+    if ok then
+      return jsonResponseValue({
+        ok = true,
+        title = keynoteLoadRequest.title,
+        icloudRelativePath = keynoteLoadRequest.relativePath,
+        resolvedPath = keynoteLoadRequest.resolvedPath,
+        mode = keynoteLoadRequest.mode,
+        slide = keynoteLoadRequest.slide,
+        detail = detail,
+      }, 200)
+    end
+
+    local status = detail == "deck-not-found" and 404 or 500
+    return jsonResponseValue({
+      ok = false,
+      error = detail,
+      title = keynoteLoadRequest.title,
+      icloudRelativePath = keynoteLoadRequest.relativePath,
+      resolvedPath = keynoteLoadRequest.resolvedPath,
+    }, status)
   end
 
   local slideNumber = nil
@@ -985,6 +1113,7 @@ _G.slidesHttpServer = server
 
 print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
 print("Slides HTTP load ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/load")
+print("Keynote HTTP load ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/keynote/load")
 print("Slides HTTP status ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/status")
 print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
 print("Slides HTTP notes font ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
