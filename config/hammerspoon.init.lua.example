@@ -582,8 +582,11 @@ end
 
 local function openKeynoteDeck(request)
   local attrs = hs.fs.attributes(request.resolvedPath)
+  local shellExists = false
   if not attrs then
-    return false, "deck-not-found"
+    local quotedPath = request.resolvedPath:gsub("'", "'\\''")
+    local _, status = hs.execute("[ -e '" .. quotedPath .. "' ]", true)
+    shellExists = status == true or status == 0
   end
 
   local slideBlock = ""
@@ -614,7 +617,11 @@ end tell
     return true, output or "opened"
   end
 
-  return false, tostring(output or descriptor or "keynote-automation-failed")
+  local detail = tostring(output or descriptor or "keynote-automation-failed")
+  if not attrs and not shellExists and detail:find("Can’t get file", 1, true) then
+    return false, "deck-not-found"
+  end
+  return false, detail
 end
 
 local function adjustNotesFont(direction, steps)
