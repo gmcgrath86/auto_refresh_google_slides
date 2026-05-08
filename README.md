@@ -341,6 +341,9 @@ curl "http://<slides-machine-ip>:8765/slides/health"
 # refresh now
 curl "http://<slides-machine-ip>:8765/slides/run"
 
+# load a specific deck, then launch it
+curl "http://<slides-machine-ip>:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
+
 # latest refresh status
 curl "http://<slides-machine-ip>:8765/slides/status"
 
@@ -366,7 +369,7 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout/80"
 curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
 
-`/slides/run` now returns `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.
+`/slides/run` and `/slides/load` return `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.
 
 ### Optional: keep HTTP control alive after reboot
 Install the Hammerspoon LaunchAgent on presentation machines:

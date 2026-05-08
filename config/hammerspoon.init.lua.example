@@ -102,6 +102,10 @@ local function buildRefreshRunPayload(run)
     exitCode = run.exitCode,
     error = run.error,
     detail = run.detail,
+    action = run.action,
+    presentationId = run.presentationId,
+    presentationTitle = run.presentationTitle,
+    presentationUrl = run.presentationUrl,
     stdout = run.stdout,
     stderr = run.stderr,
     layoutDetail = run.layoutDetail,
@@ -149,13 +153,13 @@ local function completeRefreshRun(runId, exitCode, stdOut, stdErr)
 
   if run.exitCode == 0 and layoutOk ~= false then
     run.state = "succeeded"
-    run.message = "refresh finished"
-    run.detail = "all refresh steps completed successfully"
+    run.message = run.action .. " finished"
+    run.detail = "all " .. run.action .. " steps completed successfully"
     run.error = nil
   else
     run.state = "failed"
-    run.message = "refresh failed"
-    run.detail = "one or more refresh steps failed"
+    run.message = run.action .. " failed"
+    run.detail = "one or more " .. run.action .. " steps failed"
     run.error = makeRefreshFailureDetail(run.exitCode, stdOut, stdErr, layoutDetail)
   end
 
@@ -170,19 +174,27 @@ local function completeRefreshRun(runId, exitCode, stdOut, stdErr)
   if stdErr and #stdErr > 0 then print(stdErr) end
 end
 
-local function runSlidesTrigger()
+local function runSlidesTrigger(options)
+  options = options or {}
+  local action = options.action or "refresh"
+  local actionLabel = action == "load" and "Deck load" or "Refresh"
+
   if activeRefreshRunId then
     local activeRun = refreshRunsById[activeRefreshRunId]
-    hs.notify.new({ title = "Slides", informativeText = "Refresh already running" }):send()
+    hs.notify.new({ title = "Slides", informativeText = actionLabel .. " already running" }):send()
     return false, activeRun, "refresh-already-running"
   end
 
   local run = {
     runId = nextRefreshRunId(),
+    action = action,
+    presentationId = options.presentationId,
+    presentationTitle = options.presentationTitle,
+    presentationUrl = options.presentationUrl,
     accepted = true,
     state = "running",
-    message = "refresh accepted and started",
-    detail = "the refresh command was accepted and execution has started",
+    message = action .. " accepted and started",
+    detail = "the " .. action .. " command was accepted and execution has started",
     acceptedAt = isoTimestamp(),
     startedAt = isoTimestamp(),
   }
@@ -190,19 +202,23 @@ local function runSlidesTrigger()
   activeRefreshRunId = run.runId
 
   local args = {"--mode", triggerMode, "--config", triggerConfig}
+  if options.slidesUrl and #options.slidesUrl > 0 then
+    table.insert(args, "--slides-url")
+    table.insert(args, options.slidesUrl)
+  end
 
   local task = hs.task.new(triggerScript, function(exitCode, stdOut, stdErr)
     completeRefreshRun(run.runId, exitCode, stdOut, stdErr)
     local completedRun = refreshRunsById[run.runId]
 
     if completedRun and completedRun.state == "succeeded" then
-      hs.notify.new({ title = "Slides", informativeText = "Refresh finished" }):send()
+      hs.notify.new({ title = "Slides", informativeText = actionLabel .. " finished" }):send()
     else
-      local failureText = "Refresh failed"
+      local failureText = actionLabel .. " failed"
       if completedRun and completedRun.error and #completedRun.error > 0 then
         failureText = completedRun.error
       elseif exitCode ~= nil then
-        failureText = "Refresh failed (" .. tostring(exitCode) .. ")"
+        failureText = actionLabel .. " failed (" .. tostring(exitCode) .. ")"
       end
       hs.notify.new({ title = "Slides", informativeText = failureText }):send()
     end
@@ -212,14 +228,14 @@ local function runSlidesTrigger()
 
   if not task then
     run.state = "failed"
-    run.message = "refresh failed"
-    run.detail = "failed to create the refresh task"
-    run.error = "failed to create the refresh task"
+    run.message = action .. " failed"
+    run.detail = "failed to create the " .. action .. " task"
+    run.error = "failed to create the " .. action .. " task"
     run.finishedAt = isoTimestamp()
     activeRefreshRunId = nil
     activeRefreshTask = nil
     trackRefreshRun(run)
-    hs.notify.new({ title = "Slides", informativeText = "Failed to create hotkey task" }):send()
+    hs.notify.new({ title = "Slides", informativeText = "Failed to create " .. action .. " task" }):send()
     return false, run, "failed-to-create-task"
   end
 
@@ -227,14 +243,14 @@ local function runSlidesTrigger()
   local started = task:start()
   if not started then
     run.state = "failed"
-    run.message = "refresh failed"
-    run.detail = "failed to start the refresh task"
-    run.error = "failed to start the refresh task"
+    run.message = action .. " failed"
+    run.detail = "failed to start the " .. action .. " task"
+    run.error = "failed to start the " .. action .. " task"
     run.finishedAt = isoTimestamp()
     activeRefreshRunId = nil
     activeRefreshTask = nil
     trackRefreshRun(run)
-    hs.notify.new({ title = "Slides", informativeText = "Failed to start refresh task" }):send()
+    hs.notify.new({ title = "Slides", informativeText = "Failed to start " .. action .. " task" }):send()
     return false, run, "failed-to-start-task"
   end
 
@@ -296,6 +312,63 @@ local function parseNumericQueryValue(query, acceptedKeys)
     end
   end
   return nil
+end
+
+local function urlDecode(value)
+  local text = tostring(value or "")
+  text = text:gsub("+", " ")
+  text = text:gsub("%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end)
+  return text
+end
+
+local function parseQueryValues(query)
+  local values = {}
+  if #query == 0 then
+    return values
+  end
+
+  for pair in query:gmatch("[^&]+") do
+    local rawKey, rawValue = pair:match("^([^=]+)=?(.*)$")
+    if rawKey and #rawKey > 0 then
+      values[urlDecode(rawKey)] = urlDecode(rawValue or "")
+    end
+  end
+
+  return values
+end
+
+local function isValidPresentationId(value)
+  return type(value) == "string" and value:match("^[%w_-]+$") ~= nil
+end
+
+local function parseSlidesLoadRequest(path)
+  local route, query = splitRouteAndQuery(path)
+  if route ~= "/slides/load" then
+    return nil, nil
+  end
+
+  local values = parseQueryValues(query)
+  local presentationId = values.presentation_id or values.id or ""
+  local presentationTitle = values.title or ""
+  local presentationUrl = values.presentation_url or values.url or ""
+  local sourceUrl = presentationUrl
+
+  if #sourceUrl == 0 and isValidPresentationId(presentationId) then
+    sourceUrl = "https://docs.google.com/presentation/d/" .. presentationId .. "/edit"
+  end
+
+  if not sourceUrl:match("^https?://") or not sourceUrl:find("docs.google.com/presentation/d/", 1, true) then
+    return nil, "missing-or-invalid-presentation-url"
+  end
+
+  return {
+    presentationId = presentationId,
+    presentationTitle = presentationTitle,
+    presentationUrl = #presentationUrl > 0 and presentationUrl or sourceUrl,
+    slidesUrl = sourceUrl,
+  }, nil
 end
 
 local function parseSlideNumberFromPath(path)
@@ -760,6 +833,48 @@ local function onHttpRequest(method, path, _, _)
     return jsonResponseValue(buildRefreshRunPayload(targetRun), 200)
   end
 
+  local slidesLoadRequest, slidesLoadParseError = nil, nil
+  if method == "GET" or method == "POST" then
+    slidesLoadRequest, slidesLoadParseError = parseSlidesLoadRequest(path)
+  end
+
+  if slidesLoadParseError then
+    return jsonResponseValue({
+      ok = false,
+      accepted = false,
+      error = slidesLoadParseError,
+    }, 400)
+  end
+
+  if slidesLoadRequest then
+    local ok, run, reason = runSlidesTrigger({
+      action = "load",
+      slidesUrl = slidesLoadRequest.slidesUrl,
+      presentationId = slidesLoadRequest.presentationId,
+      presentationTitle = slidesLoadRequest.presentationTitle,
+      presentationUrl = slidesLoadRequest.presentationUrl,
+    })
+    local payload = buildRefreshRunPayload(run)
+
+    if ok then
+      return jsonResponseValue(payload, 202)
+    end
+
+    if reason == "refresh-already-running" then
+      payload.ok = false
+      payload.accepted = false
+      payload.message = "load already running"
+      payload.detail = "the load command was not accepted because another slides task is already in progress"
+      payload.error = "refresh-already-running"
+      return jsonResponseValue(payload, 409)
+    end
+
+    payload.ok = false
+    payload.accepted = false
+    payload.error = payload.error or reason or "load-start-failed"
+    return jsonResponseValue(payload, 500)
+  end
+
   local slideNumber = nil
   if method == "GET" or method == "POST" then
     slideNumber = parseSlideNumberFromPath(path)
@@ -850,6 +965,7 @@ server:start()
 _G.slidesHttpServer = server
 
 print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
+print("Slides HTTP load ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/load")
 print("Slides HTTP status ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/status")
 print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
 print("Slides HTTP notes font ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")

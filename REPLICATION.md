@@ -77,6 +77,7 @@ IP="$(ipconfig getifaddr en0)"
 
 curl "http://$IP:8765/slides/health"
 curl "http://$IP:8765/slides/run"
+curl "http://$IP:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
 curl "http://$IP:8765/slides/status"
 curl "http://$IP:8765/slides/jump/25"
 curl "http://$IP:8765/slides/notes/font/up/7"

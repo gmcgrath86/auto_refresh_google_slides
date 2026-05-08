@@ -223,6 +223,7 @@ EOF
   echo "If hotkey still does nothing, enable Accessibility for Hammerspoon:"
   echo "System Settings -> Privacy & Security -> Accessibility -> Hammerspoon"
   echo "Remote trigger endpoint: http://<this-machine-ip>:8765/slides/run"
+  echo "Remote load endpoint:    http://<this-machine-ip>:8765/slides/load?presentation_id=<id>"
   echo "Remote status endpoint:  http://<this-machine-ip>:8765/slides/status"
   echo "Remote health endpoint:  http://<this-machine-ip>:8765/slides/health"
   echo "Remote jump endpoint:    http://<this-machine-ip>:8765/slides/jump/<number>"

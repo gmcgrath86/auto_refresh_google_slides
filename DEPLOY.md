@@ -164,6 +164,7 @@ Remote HTTP commands (same VLAN):
 ```bash
 curl "http://<slides-machine-ip>:8765/slides/health"
 curl "http://<slides-machine-ip>:8765/slides/run"
+curl "http://<slides-machine-ip>:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
 curl "http://<slides-machine-ip>:8765/slides/status"
 curl "http://<slides-machine-ip>:8765/slides/jump/25"
 curl "http://<slides-machine-ip>:8765/slides/jump?slide=25"
@@ -173,8 +174,8 @@ curl "http://<slides-machine-ip>:8765/slides/notes/font?dir=up&steps=7"
 curl "http://<slides-machine-ip>:8765/slides/notes/layout/80"
 curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
-The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run`.
-`/slides/run` returns `202 Accepted` with a `runId` and `statusPath`; poll `/slides/status/<runId>` for final success or failure.
+The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run` or `/slides/load`.
+`/slides/run` and `/slides/load` return `202 Accepted` with a `runId` and `statusPath`; poll `/slides/status/<runId>` for final success or failure.
 
 The `--install-launch-agent` flag installs `~/Library/LaunchAgents/com.codex.slides-hammerspoon.plist` so Hammerspoon restarts after GUI login and relaunches if it exits. It does not run before macOS user login.
 
@@ -240,4 +241,7 @@ cd '/ABSOLUTE/PATH/auto_refresh_google_slides' && ./scripts/slides_hotkey_trigge
 On deployed machines, pull tags with updates:
 ```bash
 git -C "$HOME/auto_refresh_google_slides" pull --ff-only --tags
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" --role presentation --install-hotkey --install-launch-agent --hotkey-mode local
 ```
+
+Rerunning the bootstrap command is important after HTTP endpoint changes because the live Hammerspoon file in `~/.hammerspoon/slides_hotkey.lua` is generated from the repo template.
