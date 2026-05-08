@@ -176,6 +176,7 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
 ```
 The generated Hammerspoon config also reapplies an `80/20` speaker-notes layout after each successful `/slides/run` or `/slides/load`.
 Fresh `/slides/load` requests reset to slide 1 after the deck opens.
+Notes-layout success is reported only when the post-drag divider position can be measured and matches the requested split.
 `/slides/run` and `/slides/load` return `202 Accepted` with a `runId` and `statusPath`; poll `/slides/status/<runId>` for final success or failure.
 
 The `--install-launch-agent` flag installs `~/Library/LaunchAgents/com.codex.slides-hammerspoon.plist` so Hammerspoon restarts after GUI login and relaunches if it exits. It does not run before macOS user login.

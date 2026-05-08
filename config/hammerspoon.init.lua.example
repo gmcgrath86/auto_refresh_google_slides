@@ -785,10 +785,29 @@ setNotesPaneLayout = function(notesPercent)
     refreshedDivider = findNotesDivider(presenterWindow, refreshedRoot)
   end
 
-  local actualNotesPercent = targetNotesPercent
-  if refreshedDivider then
-    local actualX = refreshedDivider.frame.x + (refreshedDivider.frame.w / 2)
-    actualNotesPercent = math.floor((100 - (((actualX - presenterFrame.x) / presenterFrame.w) * 100)) + 0.5)
+  if not refreshedDivider then
+    return false, string.format(
+      "layout-unverified:notes=%d:preview=%d:from=%d:to=%d:source=%s",
+      targetNotesPercent,
+      100 - targetNotesPercent,
+      startX,
+      targetX,
+      source
+    )
+  end
+
+  local actualX = refreshedDivider.frame.x + (refreshedDivider.frame.w / 2)
+  local actualNotesPercent = math.floor((100 - (((actualX - presenterFrame.x) / presenterFrame.w) * 100)) + 0.5)
+  if math.abs(actualNotesPercent - targetNotesPercent) > 1 then
+    return false, string.format(
+      "layout-mismatch:notes=%d:preview=%d:from=%d:to=%d:actualNotes=%d:source=%s",
+      targetNotesPercent,
+      100 - targetNotesPercent,
+      startX,
+      targetX,
+      actualNotesPercent,
+      source
+    )
   end
 
   return true, string.format(

@@ -394,3 +394,4 @@ With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any G
 - Press the hotkey or trigger script.
 - If presenter view is already open, refresh preserves the current slide number by default.
 - Fresh `/slides/load` requests intentionally land on slide 1 after the deck opens.
+- Notes-layout automation now reports success only when the post-drag divider position can be measured and matches the requested split.
