@@ -112,6 +112,7 @@ build_one_shot_local_config() {
     printf 'SLIDES_NOTES_URL=""\n'
     printf 'AUTO_CAPTURE_FRONT_TAB=0\n'
     printf 'RESTORE_PREVIOUS_SLIDE_ON_REFRESH=0\n'
+    printf 'FORCE_SLIDE_NUMBER_ON_LAUNCH=1\n'
   } >>"$TEMP_CONFIG_PATH"
   RUN_CONFIG_PATH="$TEMP_CONFIG_PATH"
 }

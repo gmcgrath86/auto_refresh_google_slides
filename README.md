@@ -134,6 +134,7 @@ cp config/local.env.example config/local.env
 - `BOUNDS_MODE` (`auto` recommended, `manual` available)
 - `DISPLAY_ASSIGNMENT` (`slides:extended,notes:desktop`)
 - `RESTORE_PREVIOUS_SLIDE_ON_REFRESH` (`1` by default; restores the live presenter slide after refresh)
+- `FORCE_SLIDE_NUMBER_ON_LAUNCH` (blank by default; one-shot `/slides/load` requests set this to `1`)
 - optional manual-only: `PRIMARY_BOUNDS`, `NOTES_BOUNDS`
 - optional timing tune:
   - `LAUNCH_DELAY_SECONDS` (post-action settle delay)
@@ -341,7 +342,7 @@ curl "http://<slides-machine-ip>:8765/slides/health"
 # refresh now
 curl "http://<slides-machine-ip>:8765/slides/run"
 
-# load a specific deck, then launch it
+# load a specific deck, launch it, and reset it to slide 1
 curl "http://<slides-machine-ip>:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
 
 # latest refresh status
@@ -392,3 +393,4 @@ With `SLIDES_SOURCE_URL=""` and `AUTO_CAPTURE_FRONT_TAB=1`, this works for any G
 - Make it the active tab (recommended).
 - Press the hotkey or trigger script.
 - If presenter view is already open, refresh preserves the current slide number by default.
+- Fresh `/slides/load` requests intentionally land on slide 1 after the deck opens.
