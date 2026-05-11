@@ -26,6 +26,8 @@ local keynoteAppPaths = {
   "/Applications/Keynote.app",
   "/Applications/Keynote Creator Studio.app",
 }
+local keynoteSlideDisplay = "extended"
+local keynoteNotesDisplay = "desktop"
 -- Automatically bias presenter view toward speaker notes after a successful run.
 -- Set to 0 to disable automatic post-run layout adjustment.
 local defaultNotesLayoutNotesPercent = 80
@@ -594,6 +596,101 @@ local function findKeynoteAppPath()
   return nil
 end
 
+local function frameArea(frame)
+  if not frame then
+    return 0
+  end
+  return math.max(0, frame.w or 0) * math.max(0, frame.h or 0)
+end
+
+local function centerDistanceSquared(a, b)
+  if not a or not b then
+    return 0
+  end
+  local ax = (a.x or 0) + ((a.w or 0) / 2)
+  local ay = (a.y or 0) + ((a.h or 0) / 2)
+  local bx = (b.x or 0) + ((b.w or 0) / 2)
+  local by = (b.y or 0) + ((b.h or 0) / 2)
+  local dx = ax - bx
+  local dy = ay - by
+  return (dx * dx) + (dy * dy)
+end
+
+local function pickScreenByRole(role)
+  local mainScreen = hs.screen.mainScreen()
+  local screens = hs.screen.allScreens()
+  if not mainScreen or #screens == 0 then
+    return nil
+  end
+
+  local lowered = tostring(role or ""):lower()
+  if lowered == "desktop" or lowered == "mirrored" or lowered == "mirror" or lowered == "primary" or lowered == "main" or lowered == "notes" then
+    return mainScreen
+  end
+
+  if lowered == "extended" or lowered == "secondary" or lowered == "nonmain" or lowered == "external" or lowered == "slides" then
+    local mainFrame = mainScreen:frame()
+    local best = nil
+    for _, screen in ipairs(screens) do
+      if screen:id() ~= mainScreen:id() then
+        if not best then
+          best = screen
+        else
+          local screenFrame = screen:frame()
+          local bestFrame = best:frame()
+          local screenArea = frameArea(screenFrame)
+          local bestArea = frameArea(bestFrame)
+          if screenArea > bestArea or (screenArea == bestArea and centerDistanceSquared(screenFrame, mainFrame) > centerDistanceSquared(bestFrame, mainFrame)) then
+            best = screen
+          end
+        end
+      end
+    end
+    return best or mainScreen
+  end
+
+  return mainScreen
+end
+
+local function arrangeKeynoteDocumentWindow()
+  local keynoteApp = hs.application.get(keynoteBundleId)
+  if not keynoteApp then
+    return "keynote-app-not-running"
+  end
+
+  local slidesScreen = pickScreenByRole(keynoteSlideDisplay)
+  local notesScreen = pickScreenByRole(keynoteNotesDisplay)
+  if not slidesScreen then
+    return "slides-screen-not-found"
+  end
+
+  local windows = keynoteApp:allWindows()
+  local targetWindow = nil
+  for _, window in ipairs(windows) do
+    local title = window:title() or ""
+    if window:isStandard() and title ~= "" then
+      targetWindow = window
+      break
+    end
+  end
+
+  if not targetWindow then
+    targetWindow = keynoteApp:mainWindow() or keynoteApp:focusedWindow()
+  end
+
+  if not targetWindow then
+    return "keynote-window-not-found"
+  end
+
+  local slidesFrame = slidesScreen:frame()
+  targetWindow:moveToScreen(slidesScreen, false, true)
+  targetWindow:setFrame(slidesFrame, 0)
+  targetWindow:focus()
+
+  local notesName = notesScreen and (notesScreen:name() or tostring(notesScreen:id())) or "unknown"
+  return "slidesScreen=" .. (slidesScreen:name() or tostring(slidesScreen:id())) .. ";notesScreen=" .. notesName
+end
+
 local function openKeynoteDeck(request)
   local attrs = hs.fs.attributes(request.resolvedPath)
   if not attrs then
@@ -609,26 +706,37 @@ local function openKeynoteDeck(request)
 ]], request.slide)
   end
 
-  local presentBlock = ""
-  if request.mode == "present" then
-    presentBlock = "  start the front document\n"
-  end
-
   local script = string.format([[
 tell application id %s
   activate
   open POSIX file %s
   delay 1
-%s%s
+%s
 end tell
-]], appleScriptQuoted(keynoteBundleId), appleScriptQuoted(request.resolvedPath), slideBlock, presentBlock)
+]], appleScriptQuoted(keynoteBundleId), appleScriptQuoted(request.resolvedPath), slideBlock)
 
   local ok, output, descriptor = hs.osascript.applescript(script)
-  if ok then
-    return true, output or "opened"
+  if not ok then
+    return false, tostring(output or descriptor or "keynote-automation-failed")
   end
 
-  return false, tostring(output or descriptor or "keynote-automation-failed")
+  local arrangementDetail = arrangeKeynoteDocumentWindow()
+
+  if request.mode == "present" then
+    local presentScript = string.format([[
+tell application id %s
+  activate
+  start the front document
+end tell
+]], appleScriptQuoted(keynoteBundleId))
+    local presentOk, presentOutput, presentDescriptor = hs.osascript.applescript(presentScript)
+    if not presentOk then
+      return false, tostring(presentOutput or presentDescriptor or "keynote-present-failed")
+    end
+    return true, "opened;arranged=" .. arrangementDetail .. ";presented"
+  end
+
+  return true, "opened;arranged=" .. arrangementDetail .. ";" .. tostring(output or "")
 end
 
 local function adjustNotesFont(direction, steps)
