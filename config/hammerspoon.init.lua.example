@@ -73,7 +73,7 @@ local function interfaceIPv4Address(iface)
     return nil
   end
 
-  local output, ok = hs.execute("/sbin/ipconfig getifaddr " .. iface, true)
+  local output, ok = hs.execute("/usr/sbin/ipconfig getifaddr " .. iface, true)
   if not ok then
     return nil
   end
