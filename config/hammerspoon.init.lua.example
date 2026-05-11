@@ -39,9 +39,63 @@ local refreshRunOrder = {}
 local activeRefreshRunId = nil
 local activeRefreshTask = nil
 local maxRefreshRunsToKeep = 20
+local activeHttpInterface = nil
+local activeHttpAddress = nil
+local httpServerMonitor = nil
 
 local function isoTimestamp()
   return os.date("!%Y-%m-%dT%H:%M:%SZ")
+end
+
+local function trimText(value)
+  local text = tostring(value or "")
+  text = text:gsub("^%s+", "")
+  text = text:gsub("%s+$", "")
+  return text
+end
+
+local function parseHttpInterfacePriority()
+  local interfaces = {}
+  for chunk in string.gmatch(tostring(httpInterface or "") .. ",", "([^,]*),") do
+    local iface = trimText(chunk)
+    if iface ~= "" then
+      table.insert(interfaces, iface)
+    end
+  end
+  if #interfaces == 0 then
+    table.insert(interfaces, "en0")
+  end
+  return interfaces
+end
+
+local function interfaceIPv4Address(iface)
+  if not tostring(iface):match("^[%w%._-]+$") then
+    return nil
+  end
+
+  local output, ok = hs.execute("/sbin/ipconfig getifaddr " .. iface, true)
+  if not ok then
+    return nil
+  end
+
+  local address = trimText(output)
+  if address:match("^%d+%.%d+%.%d+%.%d+$") then
+    return address
+  end
+
+  return nil
+end
+
+local function selectHttpInterface()
+  local interfaces = parseHttpInterfacePriority()
+  for _, iface in ipairs(interfaces) do
+    local address = interfaceIPv4Address(iface)
+    if address then
+      return iface, address
+    end
+  end
+
+  return interfaces[1], nil
 end
 
 local function summarizeText(value, maxLen)
@@ -1024,7 +1078,13 @@ end
 
 local function onHttpRequest(method, path, _, _)
   if method == "GET" and path == "/slides/health" then
-    return jsonResponse('{"ok":true,"service":"slides-trigger"}', 200)
+    return jsonResponseValue({
+      ok = true,
+      service = "slides-trigger",
+      httpInterface = activeHttpInterface,
+      httpAddress = activeHttpAddress,
+      httpInterfacePriority = parseHttpInterfacePriority(),
+    }, 200)
   end
 
   if method == "GET" and path == "/keynote/health" then
@@ -1040,6 +1100,9 @@ local function onHttpRequest(method, path, _, _)
       keynoteBundleId = keynoteBundleId,
       keynotePath = keynotePath,
       keynoteAvailable = keynoteExists,
+      httpInterface = activeHttpInterface,
+      httpAddress = activeHttpAddress,
+      httpInterfacePriority = parseHttpInterfacePriority(),
     }, 200)
   end
 
@@ -1229,17 +1292,45 @@ local function onHttpRequest(method, path, _, _)
   return jsonResponse('{"ok":false,"error":"not_found"}', 404)
 end
 
-local server = hs.httpserver.new()
-server:setInterface(httpInterface)
-server:setPort(httpPort)
-server:setCallback(onHttpRequest)
-server:start()
-_G.slidesHttpServer = server
+local server = nil
 
-print("Slides HTTP trigger ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/run")
-print("Slides HTTP load ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/load")
-print("Keynote HTTP load ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/keynote/load")
-print("Slides HTTP status ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/status")
-print("Slides HTTP jump ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
-print("Slides HTTP notes font ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
-print("Slides HTTP notes layout ready: http://" .. httpInterface .. ":" .. tostring(httpPort) .. "/slides/notes/layout/80")
+local function startSlidesHttpServer()
+  local selectedInterface, selectedAddress = selectHttpInterface()
+
+  if server then
+    server:stop()
+  end
+
+  server = hs.httpserver.new()
+  server:setInterface(selectedInterface)
+  server:setPort(httpPort)
+  server:setCallback(onHttpRequest)
+  server:start()
+
+  activeHttpInterface = selectedInterface
+  activeHttpAddress = selectedAddress
+  _G.slidesHttpServer = server
+
+  local host = activeHttpAddress or activeHttpInterface
+  print("Slides HTTP trigger ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/run")
+  print("Slides HTTP load ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/load")
+  print("Keynote HTTP load ready: http://" .. host .. ":" .. tostring(httpPort) .. "/keynote/load")
+  print("Slides HTTP status ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/status")
+  print("Slides HTTP jump ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
+  print("Slides HTTP notes font ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
+  print("Slides HTTP notes layout ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/notes/layout/80")
+end
+
+startSlidesHttpServer()
+
+if httpServerMonitor then
+  httpServerMonitor:stop()
+end
+
+httpServerMonitor = hs.timer.doEvery(30, function()
+  local selectedInterface = selectHttpInterface()
+  if selectedInterface ~= activeHttpInterface then
+    startSlidesHttpServer()
+  end
+end)
+_G.slidesHttpServerMonitor = httpServerMonitor
