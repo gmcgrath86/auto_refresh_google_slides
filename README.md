@@ -371,11 +371,17 @@ curl "http://<slides-machine-ip>:8765/slides/notes/layout/80"
 
 # equivalent query-string form
 curl "http://<slides-machine-ip>:8765/slides/notes/layout?notes=80"
+
+# jump active Keynote deck to slide 12
+curl "http://<slides-machine-ip>:8765/keynote/goto?slide=12"
+
+# close active Keynote documents plus Google Slides presentation/notes tabs
+curl "http://<slides-machine-ip>:8765/slides/kill-all"
 ```
 
 `/slides/run` and `/slides/load` return `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.
 
-`/keynote/load` resolves `icloud_relative_path` under this machine's iCloud Drive root (`~/Library/Mobile Documents/com~apple~CloudDocs`), opens the `.key` deck in Keynote, and starts presenter mode when `mode=present`. Keynote control requires Hammerspoon automation/accessibility permissions and a logged-in GUI session.
+`/keynote/load` resolves `icloud_relative_path` under this machine's iCloud Drive root (`~/Library/Mobile Documents/com~apple~CloudDocs`), opens the `.key` deck in Keynote, resets the front document to the requested `slide` number (default `1`), and starts presenter mode when `mode=present`. Keynote control requires Hammerspoon automation/accessibility permissions and a logged-in GUI session.
 When `mode=present` is used, the helper now waits for Keynote windows to appear on both the configured slide and notes displays before returning success. If Keynote starts but the presenter side never becomes visible, the endpoint returns a concise `presenter-display-not-ready:...` failure instead of a false success.
 
 ### Optional: keep HTTP control alive after reboot

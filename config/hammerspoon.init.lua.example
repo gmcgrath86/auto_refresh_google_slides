@@ -516,6 +516,22 @@ local function parseSlideNumberFromPath(path)
   return nil
 end
 
+local function parseKeynoteSlideNumberFromPath(path)
+  local route, query = splitRouteAndQuery(path)
+
+  local byRoute = route:match("^/keynote/goto/(%d+)$")
+  if byRoute then
+    return tonumber(byRoute)
+  end
+
+  if route == "/keynote/goto" then
+    local byQuery = parseNumericQueryValue(query, {"slide", "n"})
+    if byQuery then return byQuery end
+  end
+
+  return nil
+end
+
 local function parseNotesFontRequest(path)
   local route, query = splitRouteAndQuery(path)
 
@@ -844,14 +860,11 @@ local function openKeynoteDeck(request)
     return false, "deck-not-found"
   end
 
-  local slideBlock = ""
-  if request.slide and request.slide > 1 then
-    slideBlock = string.format([[
+  local slideBlock = string.format([[
   try
     show slide %d of the front document
   end try
-]], request.slide)
-  end
+]], request.slide or 1)
 
   local script = string.format([[
 tell application id %s
@@ -888,6 +901,63 @@ end tell
   end
 
   return true, "opened;arranged=" .. arrangementDetail .. ";" .. tostring(output or "")
+end
+
+local function jumpKeynoteToSlide(slideNumber)
+  if type(slideNumber) ~= "number" or slideNumber < 1 then
+    return false, "invalid-slide-number"
+  end
+
+  local script = string.format([[
+tell application id %s
+  if (count of documents) is 0 then error "keynote-document-not-found"
+  activate
+  show slide %d of the front document
+end tell
+]], appleScriptQuoted(keynoteBundleId), math.floor(slideNumber))
+
+  local ok, output, descriptor = hs.osascript.applescript(script)
+  if not ok then
+    return false, keynoteAutomationError(output, descriptor, "keynote-jump-failed")
+  end
+  return true, "jumped"
+end
+
+local function closeAllSlideDecks()
+  local keynoteScript = string.format([[
+tell application id %s
+  if it is running then
+    try
+      close every document saving no
+    end try
+  end if
+end tell
+]], appleScriptQuoted(keynoteBundleId))
+  local keynoteOk, keynoteOutput, keynoteDescriptor = hs.osascript.applescript(keynoteScript)
+  if not keynoteOk then
+    return false, keynoteAutomationError(keynoteOutput, keynoteDescriptor, "keynote-close-failed")
+  end
+
+  local chromeScript = [[
+tell application "Google Chrome"
+  if it is running then
+    repeat with oneWindow in every window
+      repeat with tabIndex from (count of tabs of oneWindow) to 1 by -1
+        set tabUrl to URL of tab tabIndex of oneWindow
+        if tabUrl contains "docs.google.com/presentation/" then
+          close tab tabIndex of oneWindow
+        end if
+      end repeat
+    end repeat
+  end if
+end tell
+]]
+  local chromeOk, chromeOutput, chromeDescriptor = hs.osascript.applescript(chromeScript)
+  if not chromeOk then
+    return false, keynoteAutomationError(chromeOutput, chromeDescriptor, "slides-tabs-close-failed")
+  end
+
+  return true, "closed"
 end
 
 local function adjustNotesFont(direction, steps)
@@ -1307,6 +1377,30 @@ local function onHttpRequest(method, path, _, _)
     }, status)
   end
 
+  local keynoteSlideNumber = nil
+  if method == "GET" or method == "POST" then
+    keynoteSlideNumber = parseKeynoteSlideNumberFromPath(path)
+  end
+
+  if keynoteSlideNumber then
+    local ok, detail = jumpKeynoteToSlide(keynoteSlideNumber)
+    if ok then
+      local body = string.format('{"ok":true,"slide":%d,"detail":"%s"}', keynoteSlideNumber, jsonEscape(detail))
+      return jsonResponse(body, 200)
+    end
+
+    local body = string.format('{"ok":false,"slide":%d,"error":"%s"}', keynoteSlideNumber, jsonEscape(detail))
+    return jsonResponse(body, 500)
+  end
+
+  if (method == "GET" or method == "POST") and path == "/slides/kill-all" then
+    local ok, detail = closeAllSlideDecks()
+    if ok then
+      return jsonResponseValue({ ok = true, detail = detail }, 200)
+    end
+    return jsonResponseValue({ ok = false, error = detail }, 500)
+  end
+
   local slideNumber = nil
   if method == "GET" or method == "POST" then
     slideNumber = parseSlideNumberFromPath(path)
@@ -1412,8 +1506,10 @@ local function startSlidesHttpServer()
   print("Slides HTTP trigger ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/run")
   print("Slides HTTP load ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/load")
   print("Keynote HTTP load ready: http://" .. host .. ":" .. tostring(httpPort) .. "/keynote/load")
+  print("Keynote HTTP jump ready: http://" .. host .. ":" .. tostring(httpPort) .. "/keynote/goto/<number>")
   print("Slides HTTP status ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/status")
   print("Slides HTTP jump ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
+  print("Slides HTTP cleanup ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/kill-all")
   print("Slides HTTP notes font ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
   print("Slides HTTP notes layout ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/notes/layout/80")
 end

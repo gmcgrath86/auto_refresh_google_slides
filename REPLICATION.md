@@ -81,8 +81,10 @@ curl "http://$IP:8765/slides/run"
 curl "http://$IP:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
 curl "http://$IP:8765/keynote/health"
 curl "http://$IP:8765/keynote/load?icloud_relative_path=Events/April%20All%20Hands.key&mode=present"
+curl "http://$IP:8765/keynote/goto?slide=12"
 curl "http://$IP:8765/slides/status"
 curl "http://$IP:8765/slides/jump/25"
+curl "http://$IP:8765/slides/kill-all"
 curl "http://$IP:8765/slides/notes/font/up/7"
 curl "http://$IP:8765/slides/notes/font/down/3"
 curl "http://$IP:8765/slides/notes/font?dir=up&steps=2"
@@ -96,7 +98,9 @@ Expected HTTP health on the current presentation machine:
 Expected Keynote behavior:
 - `.key` files are resolved under `~/Library/Mobile Documents/com~apple~CloudDocs`.
 - Keynote is detected by bundle id `com.apple.Keynote`; this supports both `/Applications/Keynote.app` and the current `/Applications/Keynote Creator Studio.app` bundle path.
-- Before `mode=present` starts playback, the Keynote document window is moved to the extended display so the full-screen slide output uses the extended display. Presenter notes stay on the desktop/mirrored display.
+- Before `mode=present` starts playback, the Keynote document is reset to the requested `slide` number (default `1`) and its window is moved to the extended display so the full-screen slide output uses the extended display. Presenter notes stay on the desktop/mirrored display.
+- `/keynote/goto` jumps the active Keynote document to a requested slide.
+- `/slides/kill-all` closes open Keynote documents plus Google Slides presentation/notes Chrome tabs while leaving unrelated Chrome tabs alone.
 - `mode=present` only returns success after Hammerspoon can see Keynote windows on the expected slide and notes displays. If the presenter side does not materialize, `/keynote/load` fails with `presenter-display-not-ready:...` instead of claiming success.
 - AppleScript failures are flattened into readable error text rather than opaque Lua table pointer strings.
 
