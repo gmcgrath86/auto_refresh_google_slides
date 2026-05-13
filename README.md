@@ -377,6 +377,9 @@ curl "http://<slides-machine-ip>:8765/keynote/goto?slide=12"
 
 # close active Keynote documents plus Google Slides presentation/notes tabs
 curl "http://<slides-machine-ip>:8765/slides/kill-all"
+
+# inspect whether Keynote or Google Slides is currently active
+curl "http://<slides-machine-ip>:8765/slides/active-deck"
 ```
 
 `/slides/run` and `/slides/load` return `202 Accepted` with a `runId` and `statusPath`. Poll `/slides/status/<runId>` until `state` becomes `succeeded` or `failed`.

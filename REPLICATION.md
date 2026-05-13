@@ -85,6 +85,7 @@ curl "http://$IP:8765/keynote/goto?slide=12"
 curl "http://$IP:8765/slides/status"
 curl "http://$IP:8765/slides/jump/25"
 curl "http://$IP:8765/slides/kill-all"
+curl "http://$IP:8765/slides/active-deck"
 curl "http://$IP:8765/slides/notes/font/up/7"
 curl "http://$IP:8765/slides/notes/font/down/3"
 curl "http://$IP:8765/slides/notes/font?dir=up&steps=2"
@@ -101,6 +102,7 @@ Expected Keynote behavior:
 - Before `mode=present` starts playback, the Keynote document is reset to the requested `slide` number (default `1`) and its window is moved to the extended display so the full-screen slide output uses the extended display. Presenter notes stay on the desktop/mirrored display.
 - `/keynote/goto` jumps the active Keynote document to a requested slide.
 - `/slides/kill-all` closes open Keynote documents plus Google Slides presentation/notes Chrome tabs while leaving unrelated Chrome tabs alone.
+- `/slides/active-deck` reports `keynote`, `google_slides`, `none`, or `ambiguous` so the control backend can route plain slide-jump requests without guessing.
 - `mode=present` only returns success after Hammerspoon can see Keynote windows on the expected slide and notes displays. If the presenter side does not materialize, `/keynote/load` fails with `presenter-display-not-ready:...` instead of claiming success.
 - AppleScript failures are flattened into readable error text rather than opaque Lua table pointer strings.
 

@@ -658,6 +658,28 @@ local function findPresenterWindow(chromeApp)
   return targetWindow
 end
 
+local function detectActiveSlideDeck()
+  local keynoteApp = hs.application.get(keynoteBundleId)
+  local keynoteActive = keynoteApp ~= nil and #keynoteApp:allWindows() > 0
+
+  local chrome = hs.application.get("Google Chrome")
+  local googleSlidesActive = false
+  if chrome then
+    googleSlidesActive = findSlidesWindow(chrome) ~= nil or findPresenterWindow(chrome) ~= nil
+  end
+
+  if keynoteActive and googleSlidesActive then
+    return "ambiguous"
+  end
+  if keynoteActive then
+    return "keynote"
+  end
+  if googleSlidesActive then
+    return "google_slides"
+  end
+  return "none"
+end
+
 local function jumpToSlide(slideNumber)
   if type(slideNumber) ~= "number" or slideNumber < 1 then
     return false, "invalid-slide-number"
@@ -1273,6 +1295,13 @@ local function onHttpRequest(method, path, _, _)
     }, 200)
   end
 
+  if method == "GET" and path == "/slides/active-deck" then
+    return jsonResponseValue({
+      ok = true,
+      activeDeck = detectActiveSlideDeck(),
+    }, 200)
+  end
+
   local isRefreshStatusRequest, requestedRunId = false, nil
   if method == "GET" then
     isRefreshStatusRequest, requestedRunId = parseRefreshStatusRequest(path)
@@ -1510,6 +1539,7 @@ local function startSlidesHttpServer()
   print("Slides HTTP status ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/status")
   print("Slides HTTP jump ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/jump/<number>")
   print("Slides HTTP cleanup ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/kill-all")
+  print("Slides HTTP active deck ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/active-deck")
   print("Slides HTTP notes font ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/notes/font/up/<steps>")
   print("Slides HTTP notes layout ready: http://" .. host .. ":" .. tostring(httpPort) .. "/slides/notes/layout/80")
 end
