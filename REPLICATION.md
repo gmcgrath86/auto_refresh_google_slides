@@ -26,10 +26,11 @@ fi
   --role presentation \
   --install-hotkey \
   --install-launch-agent \
-  --hotkey-mode local
+  --hotkey-mode local \
+  --http-interface en18,en0
 ```
 
-Use `--http-interface en18` as well when the remote HTTP listener should bind to wired Ethernet instead of Wi-Fi.
+Use `--http-interface en18,en0` when wired Ethernet should be primary and Wi-Fi should be backup. The generated Hammerspoon config binds to the first interface in the list with an IPv4 address and periodically switches back to the earlier interface if it returns.
 
 If Homebrew is unavailable, install Hammerspoon manually:
 - https://github.com/Hammerspoon/hammerspoon/releases/latest
@@ -73,17 +74,29 @@ Expected:
 
 ## 7) Validate remote HTTP commands
 ```bash
-IP="$(ipconfig getifaddr en0)"
+IP="$(ipconfig getifaddr en18 || ipconfig getifaddr en0)"
 
 curl "http://$IP:8765/slides/health"
 curl "http://$IP:8765/slides/run"
 curl "http://$IP:8765/slides/load?presentation_id=<DECK_ID>&title=April%20All%20Hands"
+curl "http://$IP:8765/keynote/health"
+curl "http://$IP:8765/keynote/load?icloud_relative_path=Events/April%20All%20Hands.key&mode=present"
 curl "http://$IP:8765/slides/status"
 curl "http://$IP:8765/slides/jump/25"
 curl "http://$IP:8765/slides/notes/font/up/7"
 curl "http://$IP:8765/slides/notes/font/down/3"
 curl "http://$IP:8765/slides/notes/font?dir=up&steps=2"
 ```
+
+Expected HTTP health on the current presentation machine:
+- active interface: `en18`
+- active address: `10.2.130.64`
+- interface priority: `["en18","en0"]`
+
+Expected Keynote behavior:
+- `.key` files are resolved under `~/Library/Mobile Documents/com~apple~CloudDocs`.
+- Keynote is detected by bundle id `com.apple.Keynote`; this supports both `/Applications/Keynote.app` and the current `/Applications/Keynote Creator Studio.app` bundle path.
+- Before `mode=present` starts playback, the Keynote document window is moved to the extended display so the full-screen slide output uses the extended display. Presenter notes stay on the desktop/mirrored display.
 
 ## 8) Fast troubleshooting
 ```bash
@@ -93,3 +106,36 @@ tail -n 100 /tmp/slides-hotkey.log
 Look for:
 - `NOTES_METHOD_USED=ax`
 - `NOTES_CLICK_DETAIL=clicked:...:source=axpress` or `source=coords-fallback`
+
+## 9) Local commit stack and fallback
+
+As of the tested presentation-machine state, the local branch contains these commits on top of `origin/main`:
+```text
+a68655b Keep audience URL repair before presenter notes
+d2f3067 Add Keynote iCloud load endpoint
+9bb2ba3 Target Apple Keynote by bundle id
+24014c2 Arrange Keynote playback on extended display
+1174c43 Support wired-first HTTP interface fallback
+e4a7046 Fix HTTP interface address lookup path
+```
+
+Operationally tested behavior:
+- `/slides/load` works on the wired interface.
+- `/slides/run` is asynchronous and returns `202 Accepted`; poll the returned `/slides/status/<runId>` path until the state is `succeeded` or `failed`.
+- `/keynote/load` works on the wired interface and reports the selected slide and notes displays in the `detail` field when `mode=open` is used.
+
+Fallback plan if the local stack causes issues:
+```bash
+cd "$HOME/auto_refresh_google_slides"
+git fetch --tags origin
+git switch main
+git reset --hard origin/main
+"$HOME/auto_refresh_google_slides/scripts/bootstrap_machine.sh" \
+  --role presentation \
+  --install-hotkey \
+  --install-launch-agent \
+  --hotkey-mode local \
+  --http-interface en18
+```
+
+That reverts to the last GitHub `main` behavior and removes the local Keynote endpoint, Keynote display arrangement, and wired-first fallback changes. If only the wired fallback is suspect, reinstall the current local checkout with `--http-interface en18` instead of `--http-interface en18,en0`.
