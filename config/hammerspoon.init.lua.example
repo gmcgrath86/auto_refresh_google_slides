@@ -347,6 +347,39 @@ local function jsonEscape(value)
   return text
 end
 
+local function summarizeAutomationValue(value, fallback)
+  local valueType = type(value)
+  if valueType == "string" then
+    local cleaned = value:gsub("%s+", " "):match("^%s*(.-)%s*$")
+    if cleaned and #cleaned > 0 then
+      return cleaned
+    end
+  elseif valueType == "number" or valueType == "boolean" then
+    return tostring(value)
+  elseif valueType == "table" then
+    local preferredKeys = {"message", "error", "NSAppleScriptErrorMessage", "NSLocalizedDescription", "detail"}
+    for _, key in ipairs(preferredKeys) do
+      local nested = summarizeAutomationValue(value[key], nil)
+      if nested then
+        return nested
+      end
+    end
+    for _, nestedValue in pairs(value) do
+      local nested = summarizeAutomationValue(nestedValue, nil)
+      if nested then
+        return nested
+      end
+    end
+  end
+  return fallback
+end
+
+local function keynoteAutomationError(output, descriptor, fallback)
+  return summarizeAutomationValue(output, nil)
+    or summarizeAutomationValue(descriptor, nil)
+    or fallback
+end
+
 local function splitRouteAndQuery(path)
   local qmark = path:find("?", 1, true)
   if qmark then
@@ -745,6 +778,66 @@ local function arrangeKeynoteDocumentWindow()
   return "slidesScreen=" .. (slidesScreen:name() or tostring(slidesScreen:id())) .. ";notesScreen=" .. notesName
 end
 
+local function countKeynoteWindowsOnScreen(keynoteApp, targetScreen)
+  if not keynoteApp or not targetScreen then
+    return 0
+  end
+
+  local targetScreenId = targetScreen:id()
+  local count = 0
+  for _, window in ipairs(keynoteApp:allWindows()) do
+    local ok, windowScreen = pcall(function()
+      return window:screen()
+    end)
+    if ok and windowScreen and windowScreen:id() == targetScreenId then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+local function waitForKeynotePresenterDisplays()
+  local keynoteApp = hs.application.get(keynoteBundleId)
+  if not keynoteApp then
+    return false, "keynote-app-not-running"
+  end
+
+  local slidesScreen = pickScreenByRole(keynoteSlideDisplay)
+  local notesScreen = pickScreenByRole(keynoteNotesDisplay)
+  if not slidesScreen then
+    return false, "slides-screen-not-found"
+  end
+  if not notesScreen then
+    return false, "notes-screen-not-found"
+  end
+
+  local distinctScreens = slidesScreen:id() ~= notesScreen:id()
+  local lastSlidesCount = 0
+  local lastNotesCount = 0
+  for _ = 1, 24 do
+    keynoteApp = hs.application.get(keynoteBundleId)
+    if not keynoteApp then
+      return false, "keynote-app-not-running"
+    end
+
+    lastSlidesCount = countKeynoteWindowsOnScreen(keynoteApp, slidesScreen)
+    lastNotesCount = countKeynoteWindowsOnScreen(keynoteApp, notesScreen)
+    if distinctScreens then
+      if lastSlidesCount > 0 and lastNotesCount > 0 then
+        return true, "presenter-displays-ready:slides=" .. tostring(lastSlidesCount) .. ";notes=" .. tostring(lastNotesCount)
+      end
+    elseif lastSlidesCount > 0 then
+      return true, "presenter-display-ready:shared-screen=" .. tostring(lastSlidesCount)
+    end
+    hs.timer.usleep(250000)
+  end
+
+  if distinctScreens then
+    return false, "presenter-display-not-ready:slides=" .. tostring(lastSlidesCount) .. ";notes=" .. tostring(lastNotesCount)
+  end
+  return false, "presenter-display-not-ready:shared-screen=" .. tostring(lastSlidesCount)
+end
+
 local function openKeynoteDeck(request)
   local attrs = hs.fs.attributes(request.resolvedPath)
   if not attrs then
@@ -771,7 +864,7 @@ end tell
 
   local ok, output, descriptor = hs.osascript.applescript(script)
   if not ok then
-    return false, tostring(output or descriptor or "keynote-automation-failed")
+    return false, keynoteAutomationError(output, descriptor, "keynote-open-failed")
   end
 
   local arrangementDetail = arrangeKeynoteDocumentWindow()
@@ -785,9 +878,13 @@ end tell
 ]], appleScriptQuoted(keynoteBundleId))
     local presentOk, presentOutput, presentDescriptor = hs.osascript.applescript(presentScript)
     if not presentOk then
-      return false, tostring(presentOutput or presentDescriptor or "keynote-present-failed")
+      return false, keynoteAutomationError(presentOutput, presentDescriptor, "keynote-present-failed")
     end
-    return true, "opened;arranged=" .. arrangementDetail .. ";presented"
+    local presenterOk, presenterDetail = waitForKeynotePresenterDisplays()
+    if not presenterOk then
+      return false, presenterDetail
+    end
+    return true, "opened;arranged=" .. arrangementDetail .. ";presented;" .. presenterDetail
   end
 
   return true, "opened;arranged=" .. arrangementDetail .. ";" .. tostring(output or "")

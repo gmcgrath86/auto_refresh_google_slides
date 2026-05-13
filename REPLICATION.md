@@ -97,6 +97,8 @@ Expected Keynote behavior:
 - `.key` files are resolved under `~/Library/Mobile Documents/com~apple~CloudDocs`.
 - Keynote is detected by bundle id `com.apple.Keynote`; this supports both `/Applications/Keynote.app` and the current `/Applications/Keynote Creator Studio.app` bundle path.
 - Before `mode=present` starts playback, the Keynote document window is moved to the extended display so the full-screen slide output uses the extended display. Presenter notes stay on the desktop/mirrored display.
+- `mode=present` only returns success after Hammerspoon can see Keynote windows on the expected slide and notes displays. If the presenter side does not materialize, `/keynote/load` fails with `presenter-display-not-ready:...` instead of claiming success.
+- AppleScript failures are flattened into readable error text rather than opaque Lua table pointer strings.
 
 ## 8) Fast troubleshooting
 ```bash
